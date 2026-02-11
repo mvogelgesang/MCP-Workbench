@@ -1,0 +1,29 @@
+{
+  "orgName": "vogelgesang industries",
+  "edition": "Developer",
+  "settings": {
+    "lightningExperienceSettings": {
+      "enableS1DesktopEnabled": true
+    },
+    "mobileSettings": {
+      "enableS1EncryptedStoragePref2": false
+    },
+    "securitySettings": {
+      "sessionSettings": {
+        "sessionTimeout": "TwelveHours"
+      }
+    },
+    "EinsteinGptSettings": {
+      "enableEinsteinGptPlatform": "true"
+    }
+  },
+  "features": [
+    "EnableSetPasswordInApi",
+    "MaxApexCodeSize:10",
+    "EinsteinGPTForDevelopers",
+    "Einstein1AIPlatform",
+    "MarketingUser",
+    "atlasPlannerPilot",
+    "agentforceMcpPilot"
+  ]
+}

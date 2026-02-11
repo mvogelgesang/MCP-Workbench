@@ -1,0 +1,132 @@
+.response-text {
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 500px;
+    overflow-y: auto;
+    background-color: #f3f3f3;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.schema-text {
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+    background-color: #fafaf9;
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #dddbda;
+}
+
+.error-details-text {
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-height: 400px;
+    overflow-y: auto;
+    background-color: #fff;
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #c23934;
+    margin: 0;
+    color: #333;
+    text-align: left;
+    max-width: 100%;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.error-json-container {
+    background-color: #f9f9f9;
+    border-radius: 4px;
+    padding: 4px;
+    border: 1px solid #dddbda;
+}
+
+
+.error-details {
+    margin-top: 0.75rem;
+    animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.error-details-toggle {
+    margin-top: 0.5rem;
+}
+
+.tool-card {
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 1rem;
+    height: 100%;
+}
+
+.tool-card:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+.response-container {
+    min-height: 400px;
+}
+
+.icon-placeholder {
+    opacity: 0.3;
+}
+
+.slds-notify {
+    padding: 0.75rem;
+    border-radius: 4px;
+}
+
+.slds-alert_error {
+    background-color: #feded8;
+    border-left: 4px solid #c23934;
+}
+
+.slds-theme_success {
+    background-color: #d8eddb;
+    border-left: 4px solid #2e844a;
+    padding: 1rem;
+}
+
+.slds-box {
+    border: 1px solid #dddbda;
+    border-radius: 4px;
+    padding: 1rem;
+}
+
+.slds-theme_shade {
+    background-color: #fafaf9;
+}
+
+.slds-theme_info {
+    background-color: #d8edff;
+    border-left: 4px solid #0176d3;
+}
+
+.slds-page-header {
+    border-bottom: 1px solid #dddbda;
+    padding-bottom: 1rem;
+}
+
+.slds-form-element__help {
+    font-size: 0.75rem;
+    color: #706e6b;
+    margin-top: 0.25rem;
+}

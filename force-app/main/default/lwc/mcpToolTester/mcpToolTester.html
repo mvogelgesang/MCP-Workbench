@@ -1,0 +1,380 @@
+<template>
+    <lightning-card title="MCP Tool Tester" icon-name="utility:agent_astro">
+        
+        <!-- Loading Spinner -->
+        <template if:true={isLoading}>
+            <div class="slds-is-relative" style="min-height: 200px;">
+                <lightning-spinner 
+                    alternative-text="Loading" 
+                    size="medium">
+                </lightning-spinner>
+            </div>
+        </template>
+
+        <!-- Error Message -->
+        <template if:true={hasError}>
+            <div class="slds-m-around_medium">
+                <div class="slds-notify slds-notify_alert slds-alert_error" role="alert">
+                    <span class="slds-assistive-text">Error</span>
+                    
+                    <div class="slds-grid slds-grid_vertical-align-start slds-gutters_small">                        
+                        <!-- Error Content -->
+                        <div class="slds-col">
+                            <!-- Error Message -->
+                            <h2 class="slds-text-heading_small slds-m-bottom_small">
+                                <lightning-icon icon-name="utility:error" size="small" variant="inverse" class="slds-m-right_x-small"></lightning-icon><strong>{error}</strong>
+                            </h2>
+                            
+                            <!-- Toggle Details Button -->
+                            <template if:true={hasErrorDetails}>
+                                <div class="slds-m-bottom_small">
+                                    <template if:true={showErrorDetails}>
+                                        <lightning-button
+                                            label="Hide Details"
+                                            variant="base"
+                                            icon-name="utility:chevronup"
+                                            icon-position="right"
+                                            onclick={handleToggleErrorDetails}
+                                            class="error-details-toggle">
+                                        </lightning-button>
+                                    </template>
+                                    <template if:false={showErrorDetails}>
+                                        <lightning-button
+                                            label="Show Details"
+                                            variant="base"
+                                            icon-name="utility:chevrondown"
+                                            icon-position="right"
+                                            onclick={handleToggleErrorDetails}
+                                            class="error-details-toggle">
+                                        </lightning-button>
+                                    </template>
+                                </div>
+                                
+                                <!-- Expanded Error Details -->
+                                <template if:true={showErrorDetails}>
+                                    <div class="error-details slds-m-top_small">
+                                        
+                                        <!-- Troubleshooting Guide (if available) -->
+                                        <template if:true={errorDetails.explanation}>
+                                            <div class="slds-m-bottom_medium">
+                                               
+                                                    <div class="slds-grid slds-grid_vertical-align-start slds-gutters_x-small">
+                                                        <div class="slds-col">
+                                                            <p class="slds-text-heading_small slds-m-bottom_x-small">
+                                                                <span class="slds-m-right_x-small">💡</span> <strong>Troubleshooting Guide:</strong>
+                                                            </p>
+                                                            <p >
+                                                                {errorDetails.explanation}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                            
+                                            </div>
+                                        </template>
+                                        
+                                        <!-- Technical Details -->
+                                        <div>
+                                            <div class="slds-text-heading_small slds-m-bottom_x-small">
+                                                <strong>Technical Details:</strong>
+                                            </div>
+                                            <div class="error-json-container">
+                                                <pre class="error-details-text">{errorDetailsJson}</pre>
+                                            </div>
+                                        </div>
+                                        
+                                    </div>
+                                </template>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Server Selection View -->
+        <template if:true={isServerSelectView}>
+            <div class="slds-m-around_medium">
+                <div class="slds-text-align_center slds-p-around_large">
+                    <lightning-icon icon-name="utility:agent_astro" size="large" class="slds-m-bottom_medium"></lightning-icon>
+                    <h2 class="slds-text-heading_medium slds-m-bottom_small">MCP Tool Tester</h2>
+                    <p class="slds-text-body_regular slds-m-bottom_medium slds-text-color_weak">
+                        Select an MCP server to discover and test available tools
+                    </p>
+                </div>
+
+                <!-- Server Selection -->
+                <div class="slds-box slds-m-horizontal_xx-large">
+                    <h3 class="slds-text-heading_small slds-m-bottom_medium">Select MCP Server</h3>
+                    
+                    <template if:true={hasServerOptions}>
+                        <lightning-combobox
+                            name="server"
+                            label="Named Credential"
+                            value={selectedServer}
+                            placeholder="Select an MCP server..."
+                            options={serverOptions}
+                            onchange={handleServerChange}
+                            class="slds-m-bottom_small">
+                        </lightning-combobox>
+                        <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_medium">
+                            Or enter the Named Credential API name manually below
+                        </p>
+                    </template>
+
+                    <lightning-input
+                        label="Named Credential API Name"
+                        placeholder="e.g., PetStore, news, notion2"
+                        value={selectedServer}
+                        onchange={handleManualServerInput}
+                        class="slds-m-bottom_medium">
+                    </lightning-input>
+
+                    <lightning-button 
+                        label="Connect to Server" 
+                        variant="brand"
+                        onclick={handleConnect}
+                        disabled={isLoading}
+                        class="slds-m-top_small">
+                    </lightning-button>
+                </div>
+
+                <!-- Connection Success -->
+                <template if:true={isInitialized}>
+                    <div class="slds-box slds-theme_success slds-m-top_medium slds-m-horizontal_xx-large">
+                        <lightning-icon icon-name="utility:success" size="small" class="slds-m-right_x-small"></lightning-icon>
+                        <strong>Connected to {selectedServerLabel}</strong>
+                        <pre class="schema-text slds-m-top_small">{serverInfoDisplay}</pre>
+                    </div>
+                </template>
+            </div>
+        </template>
+
+        <!-- Tools List View -->
+        <template if:true={isToolsView}>
+            <div class="slds-m-around_medium">
+                <div class="slds-page-header slds-m-bottom_medium">
+                    <div class="slds-page-header__row">
+                        <div class="slds-page-header__col-title">
+                            <lightning-button 
+                                icon-name="utility:back"
+                                variant="base"
+                                onclick={handleBackToServers}
+                                class="slds-m-right_small">
+                            </lightning-button>
+                            <div class="slds-media">
+                                <div class="slds-media__body">
+                                    <h1 class="slds-page-header__title">Available Tools</h1>
+                                    <p class="slds-text-body_small">Server: {selectedServerLabel}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slds-page-header__col-actions">
+                            <lightning-button 
+                                label="Refresh Tools" 
+                                icon-name="utility:refresh"
+                                onclick={loadTools}
+                                disabled={isLoading}>
+                            </lightning-button>
+                        </div>
+                    </div>
+                </div>
+
+                <template if:true={hasTools}>
+                    <div class="slds-grid slds-wrap slds-gutters">
+                        <template for:each={tools} for:item="tool">
+                            <div key={tool.key} class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-large-size_1-of-3">
+                                <article class="slds-card tool-card" data-tool={tool.name} onclick={handleToolSelect}>
+                                    <div class="slds-card__header">
+                                        <header class="slds-media slds-media_center">
+                                            <div class="slds-media__figure">
+                                                <lightning-icon icon-name="standard:code_set" size="small"></lightning-icon>
+                                            </div>
+                                            <div class="slds-media__body">
+                                                <h2 class="slds-card__header-title">
+                                                    <span class="slds-text-heading_small">{tool.title}</span>
+                                                </h2>
+                                            </div>
+                                        </header>
+                                    </div>
+                                    <div class="slds-card__body slds-card__body_inner">
+                                        <p class="slds-text-body_small">{tool.description}</p>
+                                    </div>
+                                    <footer class="slds-card__footer">
+                                        <span class="slds-text-body_small slds-text-color_weak">Click to test</span>
+                                    </footer>
+                                </article>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <template if:false={hasTools}>
+                    <div class="slds-box slds-text-align_center">
+                        <p>No tools available</p>
+                    </div>
+                </template>
+            </div>
+        </template>
+
+        <!-- Tool Testing View -->
+        <template if:true={isTestingView}>
+            <div class="slds-m-around_medium">
+                <div class="slds-page-header slds-m-bottom_medium">
+                    <div class="slds-page-header__row">
+                        <div class="slds-page-header__col-title">
+                            <lightning-button 
+                                icon-name="utility:back"
+                                variant="base"
+                                onclick={handleBackToTools}
+                                class="slds-m-right_small">
+                            </lightning-button>
+                            <div class="slds-media">
+                                <div class="slds-media__figure">
+                                    <lightning-icon icon-name="standard:code_set" size="medium"></lightning-icon>
+                                </div>
+                                <div class="slds-media__body">
+                                    <h1 class="slds-page-header__title">{selectedTool.title}</h1>
+                                    <p class="slds-text-body_small">{selectedTool.description}</p>
+                                    <p class="slds-text-body_small slds-text-color_weak">Server: {selectedServerLabel}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="slds-grid slds-gutters">
+                    <!-- Left Column: Input Parameters -->
+                    <div class="slds-col slds-size_1-of-1 slds-large-size_1-of-2">
+                        <div class="slds-box">
+                            <h3 class="slds-text-heading_small slds-m-bottom_medium">Input Parameters</h3>
+                            
+                            <template if:true={toolInputFields.length}>
+                                <template for:each={toolInputFields} for:item="field">
+                                    <div key={field.key} class="slds-m-bottom_medium">
+                                        <!-- Regular (non-array) input -->
+                                        <template if:false={field.isArray}>
+                                            <lightning-input
+                                                name={field.name}
+                                                label={field.label}
+                                                type={field.type}
+                                                data-param={field.name}
+                                                onchange={handleParameterChange}
+                                                required={field.required}>
+                                            </lightning-input>
+                                            <template if:true={field.description}>
+                                                <div class="slds-form-element__help">{field.description}</div>
+                                            </template>
+                                        </template>
+
+                                        <!-- Array input -->
+                                        <template if:true={field.isArray}>
+                                            <div class="slds-form-element">
+                                                <label class="slds-form-element__label">
+                                                    {field.label}
+                                                    <template if:true={field.required}>
+                                                        <abbr class="slds-required" title="required">*</abbr>
+                                                    </template>
+                                                </label>
+                                                <template if:true={field.description}>
+                                                    <div class="slds-form-element__help slds-m-bottom_x-small">{field.description}</div>
+                                                </template>
+                                                
+                                                <!-- Array items -->
+                                                <div class="slds-box slds-box_x-small slds-theme_shade">
+                                                    <template if:true={field.items.length}>
+                                                        <template for:each={field.items} for:item="item">
+                                                            <div key={item.key} class="slds-grid slds-grid_vertical-align-center slds-gutters_x-small slds-m-bottom_x-small">
+                                                                <div class="slds-col slds-grow">
+                                                                    <lightning-input
+                                                                        value={item.value}
+                                                                        type={field.itemType}
+                                                                        data-param={field.name}
+                                                                        data-index={item.index}
+                                                                        onchange={handleArrayItemChange}
+                                                                        variant="label-hidden">
+                                                                    </lightning-input>
+                                                                </div>
+                                                                <div class="slds-col slds-no-flex">
+                                                                    <lightning-button-icon
+                                                                        icon-name="utility:delete"
+                                                                        variant="bare"
+                                                                        alternative-text="Remove item"
+                                                                        data-param={field.name}
+                                                                        data-index={item.index}
+                                                                        onclick={handleRemoveArrayItem}>
+                                                                    </lightning-button-icon>
+                                                                </div>
+                                                            </div>
+                                                        </template>
+                                                    </template>
+                                                    
+                                                    <template if:false={field.items.length}>
+                                                        <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small">
+                                                            No items added yet
+                                                        </p>
+                                                    </template>
+                                                    
+                                                    <lightning-button
+                                                        label="Add Item"
+                                                        icon-name="utility:add"
+                                                        variant="neutral"
+                                                        data-param={field.name}
+                                                        onclick={handleAddArrayItem}
+                                                        class="slds-m-top_x-small">
+                                                    </lightning-button>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </template>
+                            
+                            <template if:false={toolInputFields.length}>
+                                <p class="slds-text-body_small slds-text-color_weak">No input parameters required</p>
+                            </template>
+
+                            <div class="slds-m-top_medium">
+                                <lightning-button 
+                                    label="Execute Tool" 
+                                    variant="brand"
+                                    onclick={handleExecuteTool}
+                                    disabled={isLoading}
+                                    class="slds-m-right_small">
+                                </lightning-button>
+                            </div>
+                        </div>
+
+                        <!-- Input Schema -->
+                        <div class="slds-box slds-m-top_medium">
+                            <h3 class="slds-text-heading_small slds-m-bottom_small">Input Schema</h3>
+                            <pre class="schema-text">{selectedToolSchema}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Response -->
+                    <div class="slds-col slds-size_1-of-1 slds-large-size_1-of-2">
+                        <div class="slds-box response-container">
+                            <h3 class="slds-text-heading_small slds-m-bottom_medium">Response</h3>
+                            
+                            <template if:true={hasToolResponse}>
+                                <div class="slds-box slds-theme_shade">
+                                    <pre class="response-text">{toolResponse}</pre>
+                                </div>
+                            </template>
+
+                            <template if:false={hasToolResponse}>
+                                <div class="slds-text-align_center slds-p-vertical_large">
+                                    <lightning-icon icon-name="utility:forward" size="large" class="slds-m-bottom_small icon-placeholder"></lightning-icon>
+                                    <p class="slds-text-body_small slds-text-color_weak">
+                                        Execute the tool to see the response
+                                    </p>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+    </lightning-card>
+</template>
