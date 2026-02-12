@@ -1,5 +1,7 @@
 # MCP Workbench
 
+![MCP Workbench](assets/demo.gif)
+
 A Salesforce Lightning application for testing and validating MCP (Model Context Protocol) servers and tools before configuring them in Agentforce. Workbench allows you to:
 
 - **Connect** to any MCP server via Named Credentials
