@@ -205,6 +205,33 @@ private class McpToolTesterTest {
     System.assertEquals('Test Label', option.label);
   }
 
+  @isTest
+  static void testBuildQualifiedNameWithNamespace() {
+    System.assertEquals(
+      'ns__MyCredential',
+      McpToolTester.buildQualifiedName('ns', 'MyCredential'),
+      'Should prepend namespace prefix with double underscore'
+    );
+  }
+
+  @isTest
+  static void testBuildQualifiedNameWithNullNamespace() {
+    System.assertEquals(
+      'MyCredential',
+      McpToolTester.buildQualifiedName(null, 'MyCredential'),
+      'Should return DeveloperName only when namespace is null'
+    );
+  }
+
+  @isTest
+  static void testBuildQualifiedNameWithEmptyNamespace() {
+    System.assertEquals(
+      'MyCredential',
+      McpToolTester.buildQualifiedName('', 'MyCredential'),
+      'Should return DeveloperName only when namespace is empty'
+    );
+  }
+
   /**
    * Mock HTTP Response class for testing
    */

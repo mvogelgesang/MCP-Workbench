@@ -308,12 +308,16 @@ public with sharing class McpToolTester {
             // Note: This requires user to have appropriate permissions
             // Simplified query without NamedCredentialType filter for broader compatibility
             for (NamedCredential nc : [
-                SELECT Id, MasterLabel, DeveloperName 
+                SELECT Id, MasterLabel, DeveloperName, NamespacePrefix 
                 FROM NamedCredential 
                 ORDER BY MasterLabel ASC
                 LIMIT 200
             ]) {
-                servers.add(new ServerOption(nc.DeveloperName, nc.MasterLabel));
+                String qualifiedName = buildQualifiedName(nc.NamespacePrefix, nc.DeveloperName);
+                String label = String.isNotBlank(nc.NamespacePrefix) 
+                    ? nc.MasterLabel + ' (' + nc.NamespacePrefix + ')' 
+                    : nc.MasterLabel;
+                servers.add(new ServerOption(qualifiedName, label));
             }
         } catch (Exception e) {
             // If metadata query fails, return empty list
@@ -361,6 +365,18 @@ public with sharing class McpToolTester {
         return (Integer)(Math.random() * 1000000);
     }
     
+    /**
+     * Builds a namespace-qualified API name for use with callout: endpoints.
+     * Managed package named credentials require the namespace prefix to resolve correctly.
+     */
+    @TestVisible
+    private static String buildQualifiedName(String namespacePrefix, String developerName) {
+        if (String.isNotBlank(namespacePrefix)) {
+            return namespacePrefix + '__' + developerName;
+        }
+        return developerName;
+    }
+
     /**
      * Wrapper class for server options
      */
