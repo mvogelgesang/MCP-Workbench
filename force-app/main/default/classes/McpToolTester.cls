@@ -87,7 +87,7 @@ public with sharing class McpToolTester {
             
         } catch (McpException e) {
             // Re-throw MCP exceptions as-is
-            throw new AuraHandledException(e.getMessage());
+            throw newAuraException(e.getMessage());
             
         } catch (Exception e) {
             // Unexpected errors
@@ -103,7 +103,7 @@ public with sharing class McpToolTester {
             System.debug(LoggingLevel.ERROR, 'Unexpected Exception: ' + e.getMessage());
             System.debug(LoggingLevel.ERROR, 'Stack Trace: ' + e.getStackTraceString());
             
-            throw new AuraHandledException(JSON.serialize(errorDetails));
+            throw newAuraException(JSON.serialize(errorDetails));
         }
     }
     
@@ -188,6 +188,12 @@ public with sharing class McpToolTester {
      */
     public class McpException extends Exception {}
     
+    private static AuraHandledException newAuraException(String message) {
+        AuraHandledException ex = new AuraHandledException(message);
+        ex.setMessage(message);
+        return ex;
+    }
+    
     /**
      * Call a specific MCP tool with parameters
      * @param namedCredential - The Named Credential API name
@@ -214,8 +220,10 @@ public with sharing class McpToolTester {
             String requestBody = JSON.serialize(request);
             return callMcpServer(namedCredential, requestBody);
             
+        } catch (AuraHandledException e) {
+            throw e;
         } catch (Exception e) {
-            throw new AuraHandledException('Error calling tool: ' + e.getMessage());
+            throw newAuraException('Error calling tool: ' + e.getMessage());
         }
     }
     
@@ -236,8 +244,10 @@ public with sharing class McpToolTester {
             String requestBody = JSON.serialize(request);
             return callMcpServer(namedCredential, requestBody);
             
+        } catch (AuraHandledException e) {
+            throw e;
         } catch (Exception e) {
-            throw new AuraHandledException('Error getting tools: ' + e.getMessage());
+            throw newAuraException('Error getting tools: ' + e.getMessage());
         }
     }
     
@@ -258,8 +268,10 @@ public with sharing class McpToolTester {
             String requestBody = JSON.serialize(request);
             return callMcpServer(namedCredential, requestBody);
             
+        } catch (AuraHandledException e) {
+            throw e;
         } catch (Exception e) {
-            throw new AuraHandledException('Error getting resources: ' + e.getMessage());
+            throw newAuraException('Error getting resources: ' + e.getMessage());
         }
     }
     
@@ -288,9 +300,11 @@ public with sharing class McpToolTester {
             String requestBody = JSON.serialize(request);
             return callMcpServer(namedCredential, requestBody);
             
+        } catch (AuraHandledException e) {
+            throw e;
         } catch (Exception e) {
             System.debug('Error initializing: ' + e.getMessage());
-            throw new AuraHandledException(e.getMessage());
+            throw newAuraException(e.getMessage());
         }
     }
     
@@ -353,7 +367,7 @@ public with sharing class McpToolTester {
             return String.isNotBlank(jsonData) ? jsonData : sseResponse;
             
         } catch (Exception e) {
-            throw new AuraHandledException('Error parsing SSE response: ' + e.getMessage());
+            throw newAuraException('Error parsing SSE response: ' + e.getMessage());
         }
     }
     

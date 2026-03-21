@@ -39,9 +39,8 @@ private class McpToolTesterTest {
       String errorMessage = e.getMessage();
       System.debug('Error Message: ' + errorMessage);
       
-      // AuraHandledException may wrap the message, so look for the JSON portion
-      // The error message should contain the statusCode field
-      System.assert(errorMessage.contains('Script-thrown exception'), 'Expected error message be: Script-thrown exception');
+      System.assert(errorMessage.contains('statusCode'), 'Expected error message to contain statusCode detail');
+      System.assert(errorMessage.contains('_error'), 'Expected error message to contain _error flag');
     }
     Test.stopTest();
   }
@@ -154,7 +153,9 @@ private class McpToolTesterTest {
       McpToolTester.callTool('TestServer', 'testTool', '{"invalid":"param"}');
       System.assert(false, 'Expected exception was not thrown');
     } catch (AuraHandledException e) {
-      System.assert(e.getMessage().contains('Script-thrown exception'), 'Expected error message be: Script-thrown exception');
+      String errorMessage = e.getMessage();
+      System.assert(errorMessage.contains('statusCode'), 'Expected error message to contain statusCode detail');
+      System.assert(errorMessage.contains('_error'), 'Expected error message to contain _error flag');
     }
     Test.stopTest();
   }
