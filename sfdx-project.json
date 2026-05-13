@@ -1,12 +1,20 @@
 {
   "packageDirectories": [
     {
+      "versionName": "ver 0.1",
+      "versionNumber": "0.1.0.NEXT",
       "path": "force-app",
-      "default": true
+      "default": true,
+      "package": "MCPWorkbench",
+      "versionDescription": ""
     }
   ],
   "name": "MCP Workbench",
   "namespace": "",
   "sfdcLoginUrl": "https://login.salesforce.com",
-  "sourceApiVersion": "65.0"
+  "sourceApiVersion": "66.0",
+  "packageAliases": {
+    "MCPWorkbench": "0HoHs000000g3XYKAY",
+    "MCPWorkbench@0.1.0-1": "04tHs000000nDunIAE"
+  }
 }

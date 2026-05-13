@@ -137,15 +137,6 @@
                         class="slds-m-top_small">
                     </lightning-button>
                 </div>
-
-                <!-- Connection Success -->
-                <template if:true={isInitialized}>
-                    <div class="slds-box slds-theme_success slds-m-top_medium slds-m-horizontal_xx-large">
-                        <lightning-icon icon-name="utility:success" size="small" class="slds-m-right_x-small"></lightning-icon>
-                        <strong>Connected to {selectedServerLabel}</strong>
-                        <pre class="schema-text slds-m-top_small">{serverInfoDisplay}</pre>
-                    </div>
-                </template>
             </div>
         </template>
 
@@ -178,6 +169,26 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Server Connection Details (collapsible) -->
+                <template if:true={isInitialized}>
+                    <div class="slds-m-bottom_medium">
+                        <button class="slds-button slds-section__title-action slds-p-around_small" onclick={handleToggleServerInfo}>
+                            <lightning-icon 
+                                icon-name={serverInfoToggleIcon}
+                                size="xx-small" 
+                                class="slds-m-right_x-small">
+                            </lightning-icon>
+                            <lightning-icon icon-name="utility:success" size="xx-small" variant="success" class="slds-m-right_x-small"></lightning-icon>
+                            <span class="slds-text-body_regular"><strong>Server Connection Details</strong> — {selectedServerLabel}</span>
+                        </button>
+                        <template if:true={showServerInfo}>
+                            <div class="slds-box slds-theme_shade server-info-section">
+                                <pre class="schema-text">{serverInfoDisplay}</pre>
+                            </div>
+                        </template>
+                    </div>
+                </template>
 
                 <template if:true={hasTools}>
                     <div class="slds-grid slds-wrap slds-gutters">

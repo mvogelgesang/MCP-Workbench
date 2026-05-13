@@ -17,6 +17,8 @@ A Salesforce Lightning application for testing and validating MCP (Model Context
   - [Installation](#installation)
     - [Prerequisites](#prerequisites)
     - [Step 1: Deploy the Code](#step-1-deploy-the-code)
+      - [Non-Namespaced Orgs](#non-namespaced-orgs)
+      - [Namespaced Orgs](#namespaced-orgs)
     - [Step 2: Assign the Permission Set](#step-2-assign-the-permission-set)
   - [Use MCP Workbench](#use-mcp-workbench)
     - [Step 1: Open the App](#step-1-open-the-app)
@@ -47,6 +49,12 @@ A Salesforce Lightning application for testing and validating MCP (Model Context
 - One or more MCP servers registered via Agentforce Registry. Registration steps at: [Register MCP Server](#registering-an-mcp-server)
 
 ### Step 1: Deploy the Code
+
+#### Non-Namespaced Orgs
+
+`sf package install -p "MCPWorkbench@0.1.0-1" -o {TARGET}`
+
+#### Namespaced Orgs
 
 Clone repo:
 `git clone git@github.com:mvogelgesang/MCP-Workbench.git`

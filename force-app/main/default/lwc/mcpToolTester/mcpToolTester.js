@@ -18,6 +18,7 @@ export default class McpToolTester extends LightningElement {
     @track isInitialized = false;
     @track currentView = 'server-select'; // server-select, tools, testing
     @track showErrorDetails = false;
+    @track showServerInfo = false;
 
     /**
      * Wire to get available Named Credentials
@@ -61,6 +62,7 @@ export default class McpToolTester extends LightningElement {
         this.toolResponse = '';
         this.isInitialized = false;
         this.error = '';
+        this.showServerInfo = false;
     }
 
     /**
@@ -287,6 +289,14 @@ export default class McpToolTester extends LightningElement {
      */
     handleToggleErrorDetails() {
         this.showErrorDetails = !this.showErrorDetails;
+    }
+
+    handleToggleServerInfo() {
+        this.showServerInfo = !this.showServerInfo;
+    }
+
+    get serverInfoToggleIcon() {
+        return this.showServerInfo ? 'utility:chevrondown' : 'utility:chevronright';
     }
 
     /**

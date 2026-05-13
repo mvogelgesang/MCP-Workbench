@@ -130,3 +130,25 @@
     color: #706e6b;
     margin-top: 0.25rem;
 }
+
+.slds-section__title-action {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 1px solid #dddbda;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.slds-section__title-action:hover {
+    background-color: #f3f3f3;
+}
+
+.server-info-section {
+    border-top: none;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    margin-top: -1px;
+}
