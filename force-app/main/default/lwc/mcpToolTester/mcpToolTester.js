@@ -7,6 +7,7 @@ import callTool from '@salesforce/apex/McpToolTester.callTool';
 export default class McpToolTester extends LightningElement {
     @track selectedServer = '';
     @track serverOptions = [];
+    @track serverListError = '';
     @track serverInfo = null;
     @track tools = [];
     @track selectedTool = null;
@@ -21,7 +22,10 @@ export default class McpToolTester extends LightningElement {
     @track showServerInfo = false;
 
     /**
-     * Wire to get available Named Credentials
+     * Wire to get available Named Credentials. On error we surface a
+     * small inline hint under the dropdown rather than a full-page
+     * banner -- manual entry of the Named Credential API name is always
+     * supported as a fallback.
      */
     @wire(getAvailableServers)
     wiredServers({ error, data }) {
@@ -30,9 +34,19 @@ export default class McpToolTester extends LightningElement {
                 label: server.label,
                 value: server.value
             }));
+            this.serverListError = '';
         } else if (error) {
             console.error('Error loading servers:', error);
+            this.serverOptions = [];
+            const parsed = this.parseApexErrorBody(error);
+            this.serverListError = parsed && parsed.explanation
+                ? parsed.explanation
+                : 'Could not load Named Credentials. Enter the API name manually below.';
         }
+    }
+
+    get hasServerListError() {
+        return !!this.serverListError;
     }
 
     /**
@@ -238,49 +252,95 @@ export default class McpToolTester extends LightningElement {
     }
     
     /**
-     * Handle MCP protocol errors
+     * Handle MCP protocol (JSON-RPC) errors. Surface code and any
+     * actionable `data.detail` directly in the banner so users do not
+     * have to expand the technical-details panel for the common case.
      */
     handleMcpError(title, error) {
-        this.error = `${title}: ${error.message || 'Unknown error'}`;
+        const code = error.code !== undefined && error.code !== null ? ` [code ${error.code}]` : '';
+        let detailHint = '';
+        if (error.data) {
+            if (typeof error.data === 'string') {
+                detailHint = ` -- ${error.data}`;
+            } else if (error.data.detail) {
+                detailHint = ` -- ${error.data.detail}`;
+            } else if (error.data.message) {
+                detailHint = ` -- ${error.data.message}`;
+            }
+        }
+        this.error = `${title}${code}: ${error.message || 'Unknown error'}${detailHint}`;
         this.errorDetails = {
             type: 'MCP Error',
             code: error.code,
             message: error.message,
-            data: error.data
+            data: error.data,
+            title: title
         };
     }
-    
+
     /**
-     * Handle Apex/HTTP errors with detailed information
+     * Extract the parseable JSON payload from an Apex AuraHandledException
+     * (returned by callMcpServer / wrappers / getAvailableServers). Returns
+     * null when the message is not the structured shape.
+     */
+    parseApexErrorBody(err) {
+        const errorBody = err && err.body ? err.body.message : (err && err.message);
+        if (!errorBody) {
+            return null;
+        }
+        try {
+            const parsed = JSON.parse(errorBody);
+            return parsed && parsed._error ? parsed : null;
+        } catch (parseErr) { // eslint-disable-line no-unused-vars
+            return null;
+        }
+    }
+
+    /**
+     * Handle Apex/HTTP errors with detailed information.
      */
     handleApexError(err, title) {
         console.log('Error Object:', JSON.stringify(err, null, 2));
-        const errorBody = err.body ? err.body.message : err.message;
+        const errorBody = err && err.body ? err.body.message : (err && err.message);
         console.log('Error Body:', errorBody);
-        
-        // Try to parse as structured error from enhanced Apex
+
+        const parsedError = this.parseApexErrorBody(err);
+        if (parsedError) {
+            console.log('Parsed Apex Error:', JSON.stringify(parsedError, null, 2));
+            const summary = parsedError.message
+                || parsedError.status
+                || parsedError.explanation
+                || 'Error occurred';
+            this.error = `${title}: ${summary}`;
+            this.errorDetails = {
+                ...parsedError,
+                title: title
+            };
+            return;
+        }
+
+        if (errorBody === 'Script-thrown exception') {
+            this.error = `${title}: Script-thrown exception (Apex returned a generic error).` +
+                ' Open the browser console and Salesforce Debug Log for the underlying message.';
+            this.errorDetails = {
+                title: title,
+                hint: 'AuraHandledException did not carry a structured message. ' +
+                    'This usually means the Apex side hit an unexpected exception type, ' +
+                    'or the message exceeded Lightning size limits.',
+                rawErrorObject: this.safeStringify(err)
+            };
+            return;
+        }
+
+        this.error = `${title}: ${errorBody}`;
+        this.errorDetails = { title: title, message: errorBody };
+    }
+
+    safeStringify(obj) {
         try {
-            const parsedError = JSON.parse(errorBody);
-            
-            if (parsedError._error) {
-                // Enhanced error from Apex
-                console.log('Parsed Apex Error:', JSON.stringify(parsedError, null, 2));
-                this.error = `${title}: ${parsedError.message || parsedError.status || 'Error occurred'}`;
-                this.errorDetails = {
-                    ...parsedError,
-                    title: title
-                };
-            } else {
-                // Standard error
-                console.log('Standard Error Body:', errorBody);
-                this.error = `${title}: ${errorBody}`;
-                this.errorDetails = { message: errorBody };
-            }
-        } catch (e) {
-            // Not JSON, display as-is
-            console.log('Non-JSON Error Body:', errorBody);
-            this.error = `${title}: ${errorBody}`;
-            this.errorDetails = { message: errorBody };
+            return JSON.stringify(obj, null, 2);
+        } catch (stringifyErr) { // eslint-disable-line no-unused-vars
+            return String(obj);
         }
     }
     
@@ -318,12 +378,16 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Parse MCP response (handles both plain JSON and SSE format)
+     * Parse MCP response (handles both plain JSON and SSE format).
+     * On parse failure, surface a JSON-RPC-shaped error whose `data`
+     * field carries the raw body (truncated) and the parser exception
+     * so handleMcpError can render actionable detail. Previously this
+     * collapsed every failure to "Invalid response format" with no body.
      */
     parseResponse(responseStr) {
+        const RAW_PREVIEW_MAX = 4000;
         try {
-            // Check if it's SSE format
-            if (responseStr.includes('event:') && responseStr.includes('data:')) {
+            if (responseStr && responseStr.includes('event:') && responseStr.includes('data:')) {
                 const lines = responseStr.split('\n');
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
@@ -331,11 +395,23 @@ export default class McpToolTester extends LightningElement {
                     }
                 }
             }
-            // Plain JSON
             return JSON.parse(responseStr);
         } catch (e) {
             console.error('Error parsing response:', e);
-            return { error: { message: 'Invalid response format' } };
+            const preview = (responseStr || '').slice(0, RAW_PREVIEW_MAX);
+            const truncated = (responseStr || '').length > RAW_PREVIEW_MAX;
+            return {
+                error: {
+                    code: 'PARSE_ERROR',
+                    message: 'Invalid response format from MCP server',
+                    data: {
+                        detail: e && e.message ? e.message : String(e),
+                        rawResponse: preview,
+                        rawResponseTruncated: truncated,
+                        rawResponseLength: (responseStr || '').length
+                    }
+                }
+            };
         }
     }
 
@@ -359,8 +435,7 @@ export default class McpToolTester extends LightningElement {
                                     text: parsedText, // Replace string with parsed object
                                     _note: 'Nested JSON detected and parsed'
                                 };
-                            } catch (e) {
-                                // Not JSON, return as-is
+                            } catch (notJson) { // eslint-disable-line no-unused-vars
                                 return item;
                             }
                         }

@@ -121,6 +121,16 @@
                         </p>
                     </template>
 
+                    <template if:true={hasServerListError}>
+                        <div class="slds-notify slds-notify_alert slds-alert_warning slds-m-bottom_small" role="alert">
+                            <span class="slds-assistive-text">Warning</span>
+                            <p class="slds-text-body_small">
+                                <lightning-icon icon-name="utility:warning" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                                {serverListError}
+                            </p>
+                        </div>
+                    </template>
+
                     <lightning-input
                         label="Named Credential API Name"
                         placeholder="e.g., PetStore, news, notion2"

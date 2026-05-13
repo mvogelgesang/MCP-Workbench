@@ -290,11 +290,11 @@ private class McpToolTesterTest {
     Test.stopTest();
   }
 
-  // Pins the IP-allowlist gap: the team hit a Named Credential that
-  // returned an IP-block message, but getErrorExplanation has no
-  // dedicated branch for it, so users see the generic "Forbidden" text.
+  // After the A.4 fix: a 403 whose body looks like an IP-allowlist
+  // denial gets the dedicated explanation pointing the user at the
+  // org's outbound IPs. Body is still embedded in rawResponse.
   @isTest
-  static void testCallMcpServer_403IpBlocked_FallsBackToGeneric403Explanation() {
+  static void testCallMcpServer_403IpBlocked_HitsIpAllowlistExplanation() {
     String body = 'IP address 1.2.3.4 is not allowed to access this service';
     Test.setMock(
       HttpCalloutMock.class,
@@ -310,13 +310,12 @@ private class McpToolTesterTest {
       System.assert(msg.contains('"statusCode":403'), 'Missing statusCode: ' + msg);
       System.assert(msg.contains('1.2.3.4'), 'Raw response body should be embedded: ' + msg);
       System.assert(!msg.contains('"mcpError"'), 'Plain-text body should NOT yield mcpError: ' + msg);
-      System.assert(msg.contains('Forbidden'), 'Should fall back to generic 403 explanation: ' + msg);
       String explanation = extractExplanation(msg);
-      System.assert(
-        explanation != null && !explanation.containsIgnoreCase('IP'),
-        'GAP: 403 explanation does not currently call out IP-allowlist denials. ' +
-        'Explanation today: ' + explanation
-      );
+      System.assertNotEquals(null, explanation, 'Explanation must be present: ' + msg);
+      System.assert(explanation.containsIgnoreCase('IP allowlist'),
+        'Explanation should call out IP allowlist: ' + explanation);
+      System.assert(explanation.containsIgnoreCase('outbound IP'),
+        'Explanation should mention outbound IPs: ' + explanation);
     }
     Test.stopTest();
   }
@@ -459,11 +458,10 @@ private class McpToolTesterTest {
     Test.stopTest();
   }
 
-  // Pins A.5: 407 (proxy auth required) is a real-world error that has
-  // no dedicated explanation today. This test will start failing if/when
-  // a 407 branch is added, prompting an explanation update.
+  // After the A.5 fix: 407 has a dedicated explanation that points at
+  // the proxy-auth requirement.
   @isTest
-  static void testCallMcpServer_407_GapInExplanationsFallsBackToGeneric() {
+  static void testCallMcpServer_407_HitsProxyAuthExplanation() {
     Test.setMock(
       HttpCalloutMock.class,
       new McpMockHttpResponse(407, 'Proxy Authentication Required')
@@ -476,9 +474,10 @@ private class McpToolTesterTest {
     } catch (AuraHandledException e) {
       String msg = e.getMessage();
       System.assert(msg.contains('"statusCode":407'), 'Missing statusCode: ' + msg);
-      System.assert(msg.contains('HTTP 407 error occurred'),
-        'GAP: 407 currently falls back to the generic explanation. ' +
-        'If a dedicated branch is added, update this test. Got: ' + msg);
+      String explanation = extractExplanation(msg);
+      System.assertNotEquals(null, explanation, 'Explanation must be present: ' + msg);
+      System.assert(explanation.contains('Proxy Authentication Required'),
+        'Explanation should mention proxy auth: ' + explanation);
     }
     Test.stopTest();
   }
@@ -498,6 +497,9 @@ private class McpToolTesterTest {
   //     the JSON message through unchanged.
   // ===================================================================
 
+  // After the A.3 fix: CalloutException is converted directly to an
+  // AuraHandledException (no longer a raw McpException), so the LWC
+  // framework receives a properly-shaped error.
   @isTest
   static void testCallMcpServer_CalloutException_UnauthorizedEndpoint_RemoteSiteExplanation() {
     Test.setMock(
@@ -511,21 +513,16 @@ private class McpToolTesterTest {
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
       System.assert(msg.contains('"type":"CalloutException"'), 'Missing type: ' + msg);
       System.assert(msg.contains('Remote Site Settings'), 'Missing remote-site explanation: ' + msg);
       System.assert(msg.contains('TestServer'), 'Explanation should reference Named Credential: ' + msg);
-      System.assertEquals('McpToolTester.McpException', e.getTypeName(),
-        'callMcpServer surfaces CalloutException as a raw McpException (latent footgun if ' +
-        'invoked directly from the LWC framework)');
     }
     Test.stopTest();
   }
 
-  // The current substring check is `errorMessage.contains('timeout')`,
-  // so a message containing the literal word "timeout" matches the
-  // dedicated explanation.
+  // The substring check matches "timeout" (case-insensitive after A.5).
   @isTest
   static void testCallMcpServer_CalloutException_TimeoutKeyword_HitsTimeoutExplanation() {
     Test.setMock(
@@ -537,29 +534,27 @@ private class McpToolTesterTest {
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
       System.assert(msg.contains('Connection timeout'), 'Should hit timeout explanation: ' + msg);
     }
     Test.stopTest();
   }
 
-  // Pins the gap: Salesforce often emits "Read timed out" for socket
-  // timeouts, but the substring check looks for "timeout" (no space),
-  // so this falls through to the generic message.
+  // After the A.5 fix: "Read timed out" is recognised via the broadened
+  // substring check ("timed out") and gets the timeout explanation.
   @isTest
-  static void testCallMcpServer_CalloutException_ReadTimedOut_GapFallsBackToGeneric() {
+  static void testCallMcpServer_CalloutException_ReadTimedOut_HitsTimeoutExplanation() {
     Test.setMock(HttpCalloutMock.class, new McpMockCalloutFailure('Read timed out'));
 
     Test.startTest();
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
-      System.assert(msg.contains('Network error occurred'),
-        'GAP: "Read timed out" does not contain the literal "timeout" so it falls back. ' +
-        'If the substring check is broadened, update this test. Got: ' + msg);
+      System.assert(msg.contains('Connection timeout'),
+        'After fix, "Read timed out" should hit timeout explanation: ' + msg);
     }
     Test.stopTest();
   }
@@ -575,7 +570,7 @@ private class McpToolTesterTest {
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
       System.assert(msg.contains('Cannot resolve hostname'), 'Should hit hostname explanation: ' + msg);
       System.assert(msg.contains('TestServer'), 'Explanation should reference Named Credential: ' + msg);
@@ -594,7 +589,7 @@ private class McpToolTesterTest {
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
       System.assert(msg.contains('Connection refused'), 'Should mention refusal: ' + msg);
       System.assert(msg.contains('Firewall'), 'Should mention firewall in explanation: ' + msg);
@@ -613,19 +608,18 @@ private class McpToolTesterTest {
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
       System.assert(msg.contains('permission set'), 'Should hit perm-set explanation: ' + msg);
     }
     Test.stopTest();
   }
 
-  // The original report: a Named Credential rejected the org's IP and
-  // it surfaced as a generic "Script-thrown exception" in the LWC. If
-  // the underlying Apex error is a CalloutException with IP-block
-  // wording, today it falls through to the generic explanation.
+  // After the A.4 fix: a CalloutException whose message looks like an
+  // IP-allowlist denial gets the dedicated explanation pointing at the
+  // org's outbound IPs. This was the original team-reported symptom.
   @isTest
-  static void testCallMcpServer_CalloutException_IpBlocked_GapFallsBackToGeneric() {
+  static void testCallMcpServer_CalloutException_IpBlocked_HitsIpAllowlistExplanation() {
     Test.setMock(
       HttpCalloutMock.class,
       new McpMockCalloutFailure('Forbidden by external service: IP address 1.2.3.4 is not allowed')
@@ -635,13 +629,16 @@ private class McpToolTesterTest {
     try {
       McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
       System.assert(false, 'Expected an exception');
-    } catch (Exception e) {
+    } catch (AuraHandledException e) {
       String msg = e.getMessage();
-      System.assert(msg.contains('Network error occurred'),
-        'GAP: IP-allowlist callout messages have no dedicated branch in ' +
-        'getCalloutErrorExplanation. Got: ' + msg);
+      String explanation = extractExplanation(msg);
+      System.assertNotEquals(null, explanation, 'Explanation must be present: ' + msg);
+      System.assert(explanation.containsIgnoreCase('outbound IP'),
+        'After fix, explanation must mention outbound IPs: ' + explanation);
+      System.assert(explanation.containsIgnoreCase('allowlist'),
+        'After fix, explanation must mention allowlist: ' + explanation);
       System.assert(msg.contains('1.2.3.4'),
-        'Raw message must still be embedded so users can see the IP via Show Details: ' + msg);
+        'Raw message must still be embedded for diagnostics: ' + msg);
     }
     Test.stopTest();
   }
@@ -672,12 +669,12 @@ private class McpToolTesterTest {
     System.assert(callMsg.startsWith('{'), 'callTool should pass JSON through on HTTP errors: ' + callMsg);
   }
 
-  // The bug: only the CalloutException path causes the prefix. Three of
-  // four wrappers prepend "Error <verb>: " which makes the LWC's
-  // JSON.parse fail and suppresses the structured error UI. Only
-  // initializeConnection passes the JSON through unchanged.
+  // After the A.2 + A.3 fix: CalloutException is now converted to
+  // AuraHandledException inside callMcpServer, the wrappers re-throw it
+  // untouched, and so all four entry points produce a parseable JSON
+  // message. The earlier wrapper-prefix bug is gone.
   @isTest
-  static void testWrappers_CalloutException_PrefixInconsistencyBreaksLwcParse() {
+  static void testWrappers_CalloutException_AllPreserveJsonMessage() {
     Test.setMock(HttpCalloutMock.class, new McpMockCalloutFailure('IO Exception: Connection refused'));
 
     Test.startTest();
@@ -688,17 +685,33 @@ private class McpToolTesterTest {
     Test.stopTest();
 
     System.assert(initMsg.startsWith('{'),
-      'initializeConnection passes JSON through: ' + initMsg);
+      'initializeConnection should pass JSON through: ' + initMsg);
+    System.assert(toolsMsg.startsWith('{'),
+      'getAvailableTools should pass JSON through (no prefix): ' + toolsMsg);
+    System.assert(resMsg.startsWith('{'),
+      'getAvailableResources should pass JSON through (no prefix): ' + resMsg);
+    System.assert(callMsg.startsWith('{'),
+      'callTool should pass JSON through (no prefix): ' + callMsg);
 
-    System.assert(toolsMsg.startsWith('Error getting tools: '),
-      'BUG: getAvailableTools prefixes the JSON, breaking LWC parse: ' + toolsMsg);
-    System.assert(resMsg.startsWith('Error getting resources: '),
-      'BUG: getAvailableResources prefixes the JSON, breaking LWC parse: ' + resMsg);
-    System.assert(callMsg.startsWith('Error calling tool: '),
-      'BUG: callTool prefixes the JSON, breaking LWC parse: ' + callMsg);
+    for (String m : new List<String>{ initMsg, toolsMsg, resMsg, callMsg }) {
+      System.assert(m.contains('"_error":true'),
+        'Each wrapper message must carry the structured _error flag: ' + m);
+      System.assert(m.contains('"type":"CalloutException"'),
+        'Each wrapper message must preserve the CalloutException type: ' + m);
+    }
+  }
 
-    System.assert(toolsMsg.contains('"_error":true'),
-      'Prefixed message still contains the JSON payload (just unparseable): ' + toolsMsg);
+  // Build a String of `count` repetitions of `c`. Apex's String.repeat
+  // is available in newer API versions but doubling is portable.
+  private static String repeatChar(String c, Integer count) {
+    String s = c;
+    while (s.length() * 2 <= count) {
+      s += s;
+    }
+    while (s.length() < count) {
+      s += c;
+    }
+    return s;
   }
 
   // Helper enum + dispatch for Group 3 to keep tests compact.
@@ -821,8 +834,12 @@ private class McpToolTesterTest {
   // will need an explicit update.
   // ===================================================================
 
+  // After the A.7 fix: rawResponse is truncated to MAX_RAW_RESPONSE_CHARS
+  // (~8 KB) with a marker so the AuraHandledException message stays
+  // small enough to survive Lightning sanitation. The first chunk is
+  // preserved verbatim; the marker carries the original length.
   @isTest
-  static void testCallMcpServer_LargeRawResponse_NotTruncatedByApex() {
+  static void testCallMcpServer_LargeRawResponse_TruncatedWithMarker() {
     String chunk = '0123456789ABCDEF0123456789ABCDEF';
     String big = '';
     for (Integer i = 0; i < 1024; i++) {
@@ -838,23 +855,61 @@ private class McpToolTesterTest {
       System.assert(false, 'Expected AuraHandledException');
     } catch (AuraHandledException e) {
       String msg = e.getMessage();
-      System.assert(msg.contains(big),
-        'Apex should embed the full raw body (any truncation is downstream of Apex)');
+      Integer cap = McpToolTester.MAX_RAW_RESPONSE_CHARS;
+      System.assert(msg.contains(big.substring(0, cap)),
+        'Truncated rawResponse must preserve the first ' + cap + ' chars');
+      System.assert(!msg.contains(big),
+        'Full 32KB body must not be embedded after truncation fix');
+      System.assert(msg.contains('truncated; original length 32768'),
+        'Must include a marker with the original length: ' + msg);
     }
     Test.stopTest();
   }
 
+  // Pin the truncateForAura helper directly so the contract is testable
+  // independent of the callout flow. Contract:
+  //   - null / empty / <= cap inputs pass through unchanged
+  //   - over-cap inputs preserve the first `cap` chars verbatim,
+  //     append a marker carrying the original length, and bound the
+  //     output below cap + a small constant marker overhead.
+  @isTest
+  static void testTruncateForAura_BoundaryBehavior() {
+    Integer cap = McpToolTester.MAX_RAW_RESPONSE_CHARS;
+    System.assertEquals(null, McpToolTester.truncateForAura(null), 'null passes through');
+    System.assertEquals('', McpToolTester.truncateForAura(''), 'empty passes through');
+
+    String exact = repeatChar('x', cap);
+    System.assertEquals(exact, McpToolTester.truncateForAura(exact),
+      'exactly cap chars must not be truncated');
+
+    // Build a very large input so the marker overhead is dwarfed by
+    // the savings -- the assertion that truncation actually shrinks
+    // the payload is meaningful here.
+    String huge = repeatChar('A', cap * 4);
+    String trimmed = McpToolTester.truncateForAura(huge);
+    System.assert(trimmed.length() < huge.length(),
+      'huge input must be shrunk: trimmed=' + trimmed.length() + ' huge=' + huge.length());
+    System.assert(trimmed.startsWith(huge.substring(0, cap)),
+      'first cap chars must be preserved verbatim');
+    System.assert(trimmed.contains('original length ' + huge.length()),
+      'marker must carry the original length');
+    System.assert(trimmed.length() < cap + 100,
+      'output must be bounded by cap + small marker overhead, was ' + trimmed.length());
+  }
+
   // ===================================================================
-  // Group 6 -- getAvailableServers silent-swallow behavior
+  // Group 6 -- getAvailableServers behavior
   //
-  // The catch-all in getAvailableServers returns an empty list rather
-  // than surfacing query failures. The contract under test: it never
-  // throws, and it always returns a non-null list. Running as a user
-  // without elevated metadata access exercises the swallow path.
+  // After the A.6 fix the contract is: either return a (possibly empty)
+  // list of options, or throw an AuraHandledException carrying our
+  // structured _error payload so the LWC can render an inline hint.
+  // Whether a given Standard-User profile can query NamedCredential is
+  // org-config dependent, so this test accepts both branches and
+  // asserts the shape in each.
   // ===================================================================
 
   @isTest
-  static void testGetAvailableServers_AsRestrictedUser_NeverThrowsAndReturnsList() {
+  static void testGetAvailableServers_AsRestrictedUser_EitherReturnsListOrSurfacesError() {
     Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     User restricted = new User(
       ProfileId = p.Id,
@@ -871,11 +926,25 @@ private class McpToolTesterTest {
 
     Test.startTest();
     System.runAs(restricted) {
-      List<McpToolTester.ServerOption> servers = McpToolTester.getAvailableServers();
-      System.assertNotEquals(null, servers,
-        'Contract: getAvailableServers must never return null even when the SOQL fails. ' +
-        'Today, any query failure is swallowed via System.debug only; the empty result here ' +
-        'is indistinguishable from a real "no Named Credentials configured" state.');
+      List<McpToolTester.ServerOption> servers = null;
+      String surfacedError = null;
+      try {
+        servers = McpToolTester.getAvailableServers();
+      } catch (AuraHandledException e) {
+        surfacedError = e.getMessage();
+      }
+
+      if (surfacedError != null) {
+        System.assert(surfacedError.contains('"_error":true'),
+          'Surfaced error must use the structured shape: ' + surfacedError);
+        System.assert(surfacedError.contains('Named Credentials'),
+          'Explanation must reference Named Credentials: ' + surfacedError);
+        System.assert(surfacedError.contains('manually'),
+          'Explanation must tell the user manual entry is still possible: ' + surfacedError);
+      } else {
+        System.assertNotEquals(null, servers,
+          'When the query succeeds, must return a non-null list (possibly empty)');
+      }
     }
     Test.stopTest();
   }

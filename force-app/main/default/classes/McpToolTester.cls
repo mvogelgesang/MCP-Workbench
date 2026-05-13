@@ -38,39 +38,45 @@ public with sharing class McpToolTester {
             System.debug('Response Status: ' + res.getStatus());
             System.debug('Response Body: ' + res.getBody());
             
-            // Check response status
             if (res.getStatusCode() >= 200 && res.getStatusCode() < 300) {
                 return res.getBody();
-            } else {
-                // Build detailed error response
-                Map<String, Object> errorDetails = new Map<String, Object>{
-                    '_error' => true,
-                    'statusCode' => res.getStatusCode(),
-                    'status' => res.getStatus(),
-                    'endpoint' => 'callout:' + namedCredential,
-                    'method' => 'POST',
-                    'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
-                    'rawResponse' => res.getBody()
-                };
-                
-                // Try to parse error as JSON-RPC error
-                try {
-                    Map<String, Object> parsedError = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+            }
+
+            String rawBody = res.getBody();
+            Map<String, Object> errorDetails = new Map<String, Object>{
+                '_error' => true,
+                'statusCode' => res.getStatusCode(),
+                'status' => res.getStatus(),
+                'endpoint' => 'callout:' + namedCredential,
+                'method' => 'POST',
+                'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
+                'rawResponse' => truncateForAura(rawBody)
+            };
+
+            try {
+                Object parsed = JSON.deserializeUntyped(rawBody);
+                if (parsed instanceof Map<String, Object>) {
+                    Map<String, Object> parsedError = (Map<String, Object>)parsed;
                     if (parsedError.containsKey('error')) {
                         errorDetails.put('mcpError', parsedError.get('error'));
                     }
-                } catch (Exception e) {
-                    // Not JSON, include as-is
                 }
-                
-                // Add common error explanations
-                errorDetails.put('explanation', getErrorExplanation(res.getStatusCode(), namedCredential));
-                
-                throw new McpException(JSON.serialize(errorDetails));
+            } catch (Exception parseEx) {
+                errorDetails.put('rawResponseParseError', parseEx.getMessage());
             }
-            
+
+            errorDetails.put(
+                'explanation',
+                getErrorExplanation(res.getStatusCode(), namedCredential, rawBody)
+            );
+
+            throw newAuraException(JSON.serialize(errorDetails));
+
+        } catch (AuraHandledException e) {
+            // Already shaped for the LWC; let it propagate untouched.
+            throw e;
+
         } catch (System.CalloutException e) {
-            // Network/connectivity errors
             Map<String, Object> errorDetails = new Map<String, Object>{
                 '_error' => true,
                 'type' => 'CalloutException',
@@ -79,18 +85,13 @@ public with sharing class McpToolTester {
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
                 'explanation' => getCalloutErrorExplanation(e.getMessage(), namedCredential)
             };
-            
+
             System.debug(LoggingLevel.ERROR, 'Callout Exception: ' + e.getMessage());
             System.debug(LoggingLevel.ERROR, 'Stack Trace: ' + e.getStackTraceString());
-            
-            throw new McpException(JSON.serialize(errorDetails));
-            
-        } catch (McpException e) {
-            // Re-throw MCP exceptions as-is
-            throw newAuraException(e.getMessage());
-            
+
+            throw newAuraException(JSON.serialize(errorDetails));
+
         } catch (Exception e) {
-            // Unexpected errors
             Map<String, Object> errorDetails = new Map<String, Object>{
                 '_error' => true,
                 'type' => e.getTypeName(),
@@ -99,18 +100,47 @@ public with sharing class McpToolTester {
                 'endpoint' => 'callout:' + namedCredential,
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss')
             };
-            
+
             System.debug(LoggingLevel.ERROR, 'Unexpected Exception: ' + e.getMessage());
             System.debug(LoggingLevel.ERROR, 'Stack Trace: ' + e.getStackTraceString());
-            
+
             throw newAuraException(JSON.serialize(errorDetails));
         }
     }
+
+    /**
+     * Cap large response bodies before they are embedded in an
+     * AuraHandledException message. Lightning sanitizes very large
+     * messages to a generic "Script-thrown exception" client-side; we
+     * keep enough bytes for the user to diagnose without tripping that.
+     */
+    @TestVisible
+    private static final Integer MAX_RAW_RESPONSE_CHARS = 8000;
+
+    @TestVisible
+    private static String truncateForAura(String body) {
+        if (body == null) {
+            return null;
+        }
+        if (body.length() <= MAX_RAW_RESPONSE_CHARS) {
+            return body;
+        }
+        return body.substring(0, MAX_RAW_RESPONSE_CHARS) +
+            '\n\n... [truncated; original length ' + body.length() + ' chars]';
+    }
     
     /**
-     * Get user-friendly explanation for HTTP status codes
+     * Get user-friendly explanation for HTTP status codes. The optional
+     * `responseBody` lets us refine the explanation when the upstream
+     * response carries a recognisable hint (for example IP-allowlist
+     * denials surfaced via 403 with "IP address ... is not allowed").
      */
-    private static String getErrorExplanation(Integer statusCode, String namedCredential) {
+    @TestVisible
+    private static String getErrorExplanation(
+        Integer statusCode,
+        String namedCredential,
+        String responseBody
+    ) {
         switch on statusCode {
             when 400 {
                 return 'Bad Request: The MCP server rejected the request. Check that the request format is correct.';
@@ -123,13 +153,24 @@ public with sharing class McpToolTester {
                        '4. UserExternalCredential is enabled';
             }
             when 403 {
-                return 'Forbidden: You don\'t have permission to access this resource. Check OAuth scopes and user permissions.';
+                if (looksLikeIpDenial(responseBody)) {
+                    return 'Forbidden (IP allowlist): The MCP server rejected the request because ' +
+                           'this Salesforce org\'s outbound IP is not on its allowlist. Add the org\'s ' +
+                           'outbound IPs (Setup -> Salesforce IP Addresses, or hyperforce egress IPs) ' +
+                           'to the MCP server\'s allowlist, or remove the IP restriction on the server.';
+                }
+                return 'Forbidden: You don\'t have permission to access this resource. ' +
+                       'Check OAuth scopes, user permissions, and any IP-allowlist on the MCP server.';
             }
             when 404 {
                 return 'Not Found: The MCP endpoint does not exist. Verify the Named Credential URL is correct.';
             }
             when 406 {
                 return 'Not Acceptable: The server cannot provide the requested format. This may indicate missing Accept headers.';
+            }
+            when 407 {
+                return 'Proxy Authentication Required: A network proxy between Salesforce and the MCP server requires authentication. ' +
+                       'Configure proxy credentials on the Named Credential or use an outbound network policy that bypasses the proxy.';
             }
             when 429 {
                 return 'Too Many Requests: Rate limit exceeded. Wait a moment and try again.';
@@ -151,34 +192,65 @@ public with sharing class McpToolTester {
             }
         }
     }
-    
+
+    /**
+     * Heuristic detector for upstream IP-allowlist denials. Matches the
+     * common phrasings surfaced by API gateways and load balancers (AWS
+     * WAF, Cloudflare, nginx, custom firewalls, MuleSoft, etc.).
+     */
+    @TestVisible
+    private static Boolean looksLikeIpDenial(String body) {
+        if (String.isBlank(body)) {
+            return false;
+        }
+        String b = body.toLowerCase();
+        return (b.contains('ip address') && b.contains('not allowed'))
+            || b.contains('ip is not allowed')
+            || b.contains('ip not allowed')
+            || b.contains('not in the allowlist')
+            || b.contains('not in the allow list')
+            || b.contains('ip allowlist')
+            || b.contains('forbidden by external service');
+    }
+
     /**
      * Get explanation for callout exceptions
      */
     private static String getCalloutErrorExplanation(String errorMessage, String namedCredential) {
-        if (errorMessage.contains('Unauthorized endpoint')) {
+        if (errorMessage == null) {
+            return 'Network error occurred. See error message for details.';
+        }
+        String msg = errorMessage;
+        String lower = msg.toLowerCase();
+
+        if (msg.contains('Unauthorized endpoint')) {
             return 'Endpoint not authorized in Remote Site Settings. Please:\n' +
-                   '1. Go to Setup → Remote Site Settings\n' +
+                   '1. Go to Setup -> Remote Site Settings\n' +
                    '2. Add the MCP server URL\n' +
                    '3. Or ensure Named Credential "' + namedCredential + '" is properly configured';
         }
-        if (errorMessage.contains('timeout')) {
+        if (lower.contains('timeout') || lower.contains('timed out')) {
             return 'Connection timeout. The MCP server did not respond in time. Check:\n' +
                    '1. Server is running and accessible\n' +
                    '2. Network connectivity\n' +
                    '3. Server response time';
         }
-        if (errorMessage.contains('No such host')) {
+        if (msg.contains('No such host')) {
             return 'Cannot resolve hostname. The MCP server URL may be incorrect in Named Credential "' + namedCredential + '"';
         }
-        if (errorMessage.contains('Connection refused')) {
+        if (msg.contains('Connection refused')) {
             return 'Connection refused. The MCP server is not accepting connections. Check:\n' +
                    '1. Server is running\n' +
                    '2. Correct port number\n' +
                    '3. Firewall settings';
         }
-        if (errorMessage.contains('We couldn\'t access the credential(s).')) {
+        if (msg.contains('We couldn\'t access the credential(s).')) {
             return 'We couldn\'t access the credential(s) which is likely caused by your user not being assigned the associated permission set.  Please check your users current permission set assignments.';
+        }
+        if (looksLikeIpDenial(msg)) {
+            return 'Network error: The MCP server (or a gateway in front of it) rejected the request ' +
+                   'because this Salesforce org\'s outbound IP is not on its allowlist. Add the org\'s ' +
+                   'outbound IPs to the MCP server\'s allowlist, or remove the IP restriction.';
         }
         return 'Network error occurred. See error message for details.';
     }
@@ -192,6 +264,27 @@ public with sharing class McpToolTester {
         AuraHandledException ex = new AuraHandledException(message);
         ex.setMessage(message);
         return ex;
+    }
+
+    /**
+     * Build a structured JSON message for unexpected exceptions in the
+     * thin @AuraEnabled wrappers (e.g., JSON build/parse failures
+     * before/after the callout). Mirrors the shape produced by
+     * callMcpServer so the LWC's JSON.parse path renders a uniform
+     * error UI regardless of where the failure originates.
+     */
+    private static String wrapWrapperError(String wrapperName, Exception e) {
+        Map<String, Object> details = new Map<String, Object>{
+            '_error' => true,
+            'type' => e.getTypeName(),
+            'wrapper' => wrapperName,
+            'message' => e.getMessage(),
+            'stackTrace' => truncateForAura(e.getStackTraceString()),
+            'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
+            'explanation' => 'Unexpected error in ' + wrapperName + ' before/after the MCP callout. ' +
+                             'See message and stackTrace for details.'
+        };
+        return JSON.serialize(details);
     }
     
     /**
@@ -223,7 +316,7 @@ public with sharing class McpToolTester {
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
-            throw newAuraException('Error calling tool: ' + e.getMessage());
+            throw newAuraException(wrapWrapperError('callTool', e));
         }
     }
     
@@ -247,7 +340,7 @@ public with sharing class McpToolTester {
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
-            throw newAuraException('Error getting tools: ' + e.getMessage());
+            throw newAuraException(wrapWrapperError('getAvailableTools', e));
         }
     }
     
@@ -271,7 +364,7 @@ public with sharing class McpToolTester {
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
-            throw newAuraException('Error getting resources: ' + e.getMessage());
+            throw newAuraException(wrapWrapperError('getAvailableResources', e));
         }
     }
     
@@ -304,7 +397,7 @@ public with sharing class McpToolTester {
             throw e;
         } catch (Exception e) {
             System.debug('Error initializing: ' + e.getMessage());
-            throw newAuraException(e.getMessage());
+            throw newAuraException(wrapWrapperError('initializeConnection', e));
         }
     }
     
@@ -315,30 +408,39 @@ public with sharing class McpToolTester {
      */
     @AuraEnabled(cacheable=true)
     public static List<ServerOption> getAvailableServers() {
-        List<ServerOption> servers = new List<ServerOption>();
-        
         try {
-            // Query Named Credentials metadata
-            // Note: This requires user to have appropriate permissions
-            // Simplified query without NamedCredentialType filter for broader compatibility
+            List<ServerOption> servers = new List<ServerOption>();
             for (NamedCredential nc : [
-                SELECT Id, MasterLabel, DeveloperName, NamespacePrefix 
-                FROM NamedCredential 
+                SELECT Id, MasterLabel, DeveloperName, NamespacePrefix
+                FROM NamedCredential
                 ORDER BY MasterLabel ASC
                 LIMIT 200
             ]) {
                 String qualifiedName = buildQualifiedName(nc.NamespacePrefix, nc.DeveloperName);
-                String label = String.isNotBlank(nc.NamespacePrefix) 
-                    ? nc.MasterLabel + ' (' + nc.NamespacePrefix + ')' 
+                String label = String.isNotBlank(nc.NamespacePrefix)
+                    ? nc.MasterLabel + ' (' + nc.NamespacePrefix + ')'
                     : nc.MasterLabel;
                 servers.add(new ServerOption(qualifiedName, label));
             }
+            return servers;
         } catch (Exception e) {
-            // If metadata query fails, return empty list
-            System.debug('Error querying Named Credentials: ' + e.getMessage());
+            // Surface the failure so the LWC can render an inline hint
+            // ("couldn't load Named Credentials -- enter the API name
+            // manually") instead of an indistinguishable empty dropdown.
+            // The LWC degrades gracefully: manual entry is always allowed.
+            System.debug(LoggingLevel.ERROR, 'Error querying Named Credentials: ' + e.getMessage());
+            Map<String, Object> details = new Map<String, Object>{
+                '_error' => true,
+                'type' => e.getTypeName(),
+                'message' => e.getMessage(),
+                'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
+                'explanation' => 'Could not load the Named Credentials list. ' +
+                                 'Most often caused by the running user lacking ' +
+                                 '"View Setup and Configuration". You can still ' +
+                                 'enter the Named Credential API name manually.'
+            };
+            throw newAuraException(JSON.serialize(details));
         }
-        
-        return servers;
     }
     
     /**
