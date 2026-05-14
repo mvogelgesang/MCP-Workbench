@@ -1,7 +1,10 @@
 {
   "orgName": "vogelgesang industries",
-  "edition": "Developer",
+  "edition": "Partner Developer",
   "settings": {
+    "botSettings": {
+      "enableBots": true
+    },
     "lightningExperienceSettings": {
       "enableS1DesktopEnabled": true
     },
@@ -18,12 +21,10 @@
     }
   },
   "features": [
+    "Chatbot",
     "EnableSetPasswordInApi",
     "MaxApexCodeSize:10",
-    "EinsteinGPTForDevelopers",
     "Einstein1AIPlatform",
-    "MarketingUser",
-    "atlasPlannerPilot",
-    "agentforceMcpPilot"
+    "MarketingUser"
   ]
 }

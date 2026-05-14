@@ -4,7 +4,7 @@
 
 A Salesforce Lightning application for testing and validating MCP (Model Context Protocol) servers and tools before configuring them in Agentforce. Workbench allows you to:
 
-- **Connect** to any MCP server via Named Credentials
+- **Connect** to MCP servers via Named Credentials
 - **Discover** available tools and their schemas
 - **Test** tools with custom parameters through a dynamic UI
 - **Validate** responses before deploying to Agentforce agents
@@ -67,7 +67,7 @@ Deploy all components to your org
 
 **What gets deployed:**
 
-- Apex class (`McpToolTester`) and test class
+- Apex class (`McpToolTester`) and test classes
 - Content Asset (MCP Logo)
 - Lightning app (`MCP_Workbench`)
 - Lightning Web Component (`mcpToolTester`)
@@ -90,16 +90,15 @@ You should see the **MCP Workbench** tab.
 
 ### Step 2: Select an MCP Server
 
-1. Open **MCP Workbench** app
-2. Go to the **MCP Tool Tester** tab
-3. From the dropdown or manual input, select/enter your Named Credential API name
-4. Click **"Connect to Server"**
+1. From the dropdown, select your Named Credential API name
+2. Click **"Connect to Server"**
 
 **What happens:**
 
 - Sends an MCP `initialize` request
 - Displays server info (name, version, protocol)
 - Loads available tools automatically
+- If issues exist, errors are reported on the page
 
 ### Step 3: Browse Available Tools
 
@@ -107,7 +106,7 @@ After connection, you'll see tool cards with:
 
 - **Tool name** (e.g., "getPet", "addPet")
 - **Description** (what the tool does)
-- **Click to test** 
+- **Click to test**
 
 Click any tool card to open the testing interface.
 
