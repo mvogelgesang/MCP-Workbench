@@ -52,7 +52,7 @@ A Salesforce Lightning application for testing and validating MCP (Model Context
 
 #### Non-Namespaced Orgs
 
-`sf package install -p "MCPWorkbench@0.1.0-2" -o {TARGET}`
+`sf package install -p 04tHs000000iSRyIAM -o {TARGET}`
 
 #### Namespaced Orgs
 
