@@ -3,6 +3,7 @@ import getAvailableServers from '@salesforce/apex/McpToolTester.getAvailableServ
 import initializeConnection from '@salesforce/apex/McpToolTester.initializeConnection';
 import getAvailableTools from '@salesforce/apex/McpToolTester.getAvailableTools';
 import callTool from '@salesforce/apex/McpToolTester.callTool';
+import runPermissionsDiagnostic from '@salesforce/apex/McpToolTester.runPermissionsDiagnostic';
 
 export default class McpToolTester extends LightningElement {
     @track selectedServer = '';
@@ -20,6 +21,11 @@ export default class McpToolTester extends LightningElement {
     @track currentView = 'server-select'; // server-select, tools, testing
     @track showErrorDetails = false;
     @track showServerInfo = false;
+    @track permissionsDiagnostic = null;
+    @track permissionsDiagnosticError = '';
+    @track permissionsDiagnosticLoading = false;
+    @track additionalUsername = '';
+    @track showPermissionsDiagnostic = false;
 
     /**
      * Wire to get available Named Credentials. On error we surface a
@@ -77,6 +83,9 @@ export default class McpToolTester extends LightningElement {
         this.isInitialized = false;
         this.error = '';
         this.showServerInfo = false;
+        this.permissionsDiagnostic = null;
+        this.permissionsDiagnosticError = '';
+        this.permissionsDiagnosticLoading = false;
     }
 
     /**
@@ -102,6 +111,7 @@ export default class McpToolTester extends LightningElement {
                 this.serverInfo = response.result;
                 this.isInitialized = true;
                 await this.loadTools();
+                this.loadPermissionsDiagnostic();
             } else if (response.error) {
                 this.handleMcpError('Initialization failed', response.error);
             }
@@ -110,6 +120,95 @@ export default class McpToolTester extends LightningElement {
         } finally {
             this.isLoading = false;
         }
+    }
+
+    /**
+     * Run the read-only permissions diagnostic against the connected
+     * Named Credential. Errors are isolated to the diagnostic panel
+     * so a failure here cannot block the tools list or testing flow.
+     */
+    async loadPermissionsDiagnostic() {
+        if (!this.selectedServer) {
+            return;
+        }
+        this.permissionsDiagnosticLoading = true;
+        this.permissionsDiagnosticError = '';
+
+        try {
+            const result = await runPermissionsDiagnostic({
+                namedCredential: this.selectedServer,
+                additionalUsername: this.additionalUsername || ''
+            });
+            this.permissionsDiagnostic = this.decoratePermissionsDiagnostic(result);
+        } catch (err) {
+            console.error('Permissions diagnostic failed:', err);
+            const parsed = this.parseApexErrorBody(err);
+            const summary = (parsed && (parsed.explanation || parsed.message))
+                || (err && err.body && err.body.message)
+                || (err && err.message)
+                || 'Unable to run permissions diagnostic.';
+            this.permissionsDiagnosticError = summary;
+            this.permissionsDiagnostic = null;
+        } finally {
+            this.permissionsDiagnosticLoading = false;
+        }
+    }
+
+    /**
+     * Pre-compute display-only fields (icon variants, joined perm-set
+     * labels, summary text) so the template can stay declarative.
+     * Templates cannot run expressions, so we materialise everything
+     * the markup needs here.
+     */
+    decoratePermissionsDiagnostic(raw) {
+        if (!raw) return null;
+        const decorated = {
+            ...raw,
+            permSetsGrantingExternalCredentialDisplay: (raw.permSetsGrantingExternalCredential || []).join(', '),
+            permSetsGrantingUecReadDisplay: (raw.permSetsGrantingUecRead || []).join(', '),
+            hasWarning: !!raw.warning,
+            userResults: (raw.userResults || []).map((u, idx) => ({
+                ...u,
+                key: u.userId || `user-${idx}`,
+                externalCredentialIcon: u.hasExternalCredentialAccess ? 'utility:success' : 'utility:error',
+                externalCredentialIconVariant: u.hasExternalCredentialAccess ? 'success' : 'error',
+                externalCredentialStatus: u.hasExternalCredentialAccess ? 'Likely granted' : 'Missing',
+                uecIcon: u.hasUecRead ? 'utility:success' : 'utility:error',
+                uecIconVariant: u.hasUecRead ? 'success' : 'error',
+                uecStatus: u.hasUecRead ? 'Granted' : 'Missing',
+                rowAllGood: u.hasExternalCredentialAccess && u.hasUecRead,
+                activeLabel: u.isActive ? 'Active' : 'Inactive',
+                externalCredentialGrantsDisplay: (u.grantingPermSetsForExternalCredential || []).join(', '),
+                uecGrantsDisplay: (u.grantingPermSetsForUec || []).join(', '),
+                hasExternalCredentialGrants: (u.grantingPermSetsForExternalCredential || []).length > 0,
+                hasUecGrants: (u.grantingPermSetsForUec || []).length > 0
+            }))
+        };
+        return decorated;
+    }
+
+    handleAdditionalUsernameChange(event) {
+        this.additionalUsername = event.target.value;
+    }
+
+    handleRunPermissionsDiagnostic() {
+        this.loadPermissionsDiagnostic();
+    }
+
+    handleTogglePermissionsDiagnostic() {
+        this.showPermissionsDiagnostic = !this.showPermissionsDiagnostic;
+    }
+
+    get permissionsDiagnosticToggleIcon() {
+        return this.showPermissionsDiagnostic ? 'utility:chevrondown' : 'utility:chevronright';
+    }
+
+    get hasPermissionsDiagnostic() {
+        return this.permissionsDiagnostic !== null;
+    }
+
+    get hasPermissionsDiagnosticError() {
+        return this.permissionsDiagnosticError !== '';
     }
 
     /**

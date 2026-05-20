@@ -23,6 +23,7 @@ A Salesforce Lightning application for testing and validating MCP (Model Context
   - [Use MCP Workbench](#use-mcp-workbench)
     - [Step 1: Open the App](#step-1-open-the-app)
     - [Step 2: Select an MCP Server](#step-2-select-an-mcp-server)
+    - [Permissions Diagnostic](#permissions-diagnostic)
     - [Step 3: Browse Available Tools](#step-3-browse-available-tools)
     - [Step 4: Test a Tool](#step-4-test-a-tool)
       - [Left Column: Input Parameters](#left-column-input-parameters)
@@ -98,7 +99,25 @@ You should see the **MCP Workbench** tab.
 - Sends an MCP `initialize` request
 - Displays server info (name, version, protocol)
 - Loads available tools automatically
+- Runs a read-only **Permissions Diagnostic** (see below)
 - If issues exist, errors are reported on the page
+
+### Permissions Diagnostic
+
+After a successful Connect, MCP Workbench renders a collapsible **Permissions Diagnostic** panel between **Server Connection Details** and **Available Tools**. It is read-only — nothing is granted or assigned — and is designed to catch the two most common reasons MCP traffic fails for ISV partners:
+
+1. **External Credential access (heuristic)** — `ExternalCredential` and its Principal are not directly queryable from Apex SOQL, so the diagnostic infers access from `SetupEntityAccess` rows of type `ExternalCredentialParameter`. A user who has any Permission Set granting `ExternalCredentialParameter` access is very likely to also have the principal access for this MCP. This is a strong indicator, not a guarantee — the diagnostic cannot tie a specific principal to the specific MCP you selected.
+2. **`UserExternalCredential` Read** — verified exactly via `ObjectPermissions`. The user must have Read on the `UserExternalCredential` sObject so Salesforce can resolve their per-user OAuth token at runtime.
+
+The panel runs both checks for each of:
+
+- The **current user** (the admin configuring the MCP)
+- Every active user whose `Name` starts with `Platform` — typically the Salesforce-managed **Platform Integration User** that Agentforce/MCP runs as at execution time
+- Optionally, any **specific Username** you enter in the "Also check a specific Username" input
+
+Each row shows pass / fail icons for the two checks, the Permission Set(s) currently carrying the access (when any), and a remediation hint when access is missing. To re-run after assigning a Permission Set, click **Run** in the panel.
+
+If the running user lacks "View Setup and Configuration", the panel surfaces an inline warning explaining that setup-object queries failed; the rest of MCP Workbench continues to function.
 
 ### Step 3: Browse Available Tools
 

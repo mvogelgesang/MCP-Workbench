@@ -505,4 +505,257 @@ public with sharing class McpToolTester {
             this.label = label;
         }
     }
+
+    /**
+     * Runs a read-only permissions diagnostic surfacing whether each
+     * relevant user (current admin, Platform Integration User(s)
+     * matching `Name LIKE 'Platform%'`, and an optional ad-hoc
+     * Username) has:
+     *
+     *   1. A Permission Set granting access to a SetupEntityType of
+     *      `ExternalCredentialParameter`. ExternalCredential and its
+     *      Principal are NOT queryable directly, so this is a
+     *      heuristic indicator: a user with any ExternalCredentialParameter
+     *      grant in their assigned permission sets is highly likely
+     *      to also have the principal access for this MCP. Tie-break
+     *      to the specific MCP is not possible from Apex SOQL.
+     *   2. Read on the `UserExternalCredential` sObject (verified
+     *      exactly via `ObjectPermissions`).
+     *
+     * Never writes. Degrades gracefully when setup objects are not
+     * queryable for the running user: partial results plus a
+     * populated `warning` are returned instead of a thrown exception.
+     */
+    @AuraEnabled
+    public static PermissionDiagnostic runPermissionsDiagnostic(
+        String namedCredential,
+        String additionalUsername
+    ) {
+        try {
+            PermissionDiagnostic result = new PermissionDiagnostic();
+            result.namedCredential = namedCredential;
+            result.permSetsGrantingExternalCredential = new List<String>();
+            result.permSetsGrantingUecRead = new List<String>();
+            result.userResults = new List<UserCheckResult>();
+
+            Map<Id, String> permSetLabels = new Map<Id, String>();
+
+            // Stage 1: permission sets that grant ExternalCredentialParameter access.
+            // ExternalCredential / ExternalCredentialPrincipal aren't
+            // directly queryable, so we infer access from any grant
+            // of `ExternalCredentialParameter` on the user's assigned
+            // permission sets. Profile-owned permsets surface here
+            // too, so profile grants are covered automatically.
+            Set<Id> permSetsGrantingExternalCredentialIds = new Set<Id>();
+            try {
+                for (SetupEntityAccess sea : [
+                    SELECT ParentId, Parent.Label, Parent.Name,
+                           Parent.IsOwnedByProfile, Parent.Profile.Name
+                    FROM SetupEntityAccess
+                    WHERE SetupEntityType = 'ExternalCredentialParameter'
+                ]) {
+                    permSetsGrantingExternalCredentialIds.add(sea.ParentId);
+                    String label = labelForPermSetParent(sea.Parent);
+                    permSetLabels.put(sea.ParentId, label);
+                    if (!result.permSetsGrantingExternalCredential.contains(label)) {
+                        result.permSetsGrantingExternalCredential.add(label);
+                    }
+                }
+            } catch (Exception e) {
+                result.warning = 'Could not query SetupEntityAccess for ' +
+                    'ExternalCredentialParameter -- the running user likely ' +
+                    'lacks "View Setup and Configuration". Underlying: ' +
+                    e.getMessage();
+            }
+
+            // Stage 2: permission sets that grant Read on UserExternalCredential.
+            Set<Id> permSetsGrantingUecIds = new Set<Id>();
+            try {
+                for (ObjectPermissions op : [
+                    SELECT ParentId, Parent.Label, Parent.Name,
+                           Parent.IsOwnedByProfile, Parent.Profile.Name
+                    FROM ObjectPermissions
+                    WHERE SobjectType = 'UserExternalCredential'
+                      AND PermissionsRead = true
+                ]) {
+                    permSetsGrantingUecIds.add(op.ParentId);
+                    String label = labelForPermSetParent(op.Parent);
+                    permSetLabels.put(op.ParentId, label);
+                    if (!result.permSetsGrantingUecRead.contains(label)) {
+                        result.permSetsGrantingUecRead.add(label);
+                    }
+                }
+            } catch (Exception e) {
+                if (String.isBlank(result.warning)) {
+                    result.warning = 'Could not query ObjectPermissions for ' +
+                        'UserExternalCredential: ' + e.getMessage();
+                }
+            }
+
+            // Stage 3: identify users to check. Use a sentinel for the
+            // optional Username so the bind is always non-null and
+            // cannot accidentally match a real account.
+            Id currentUserId = UserInfo.getUserId();
+            String addUser = String.isNotBlank(additionalUsername)
+                ? additionalUsername.trim()
+                : '__mcp_workbench_no_additional_user__';
+
+            List<User> users = [
+                SELECT Id, Name, Username, IsActive
+                FROM User
+                WHERE Id = :currentUserId
+                   OR Name LIKE 'Platform%'
+                   OR Username = :addUser
+                ORDER BY Name ASC
+            ];
+
+            Set<Id> userIds = new Set<Id>();
+            for (User u : users) {
+                userIds.add(u.Id);
+            }
+
+            // Stage 4: each user's assigned permission sets (covers
+            // standalone permsets and the auto-permset owned by the
+            // user's profile; both surface as PermissionSet rows).
+            Map<Id, Set<Id>> userPermSets = new Map<Id, Set<Id>>();
+            for (Id uid : userIds) {
+                userPermSets.put(uid, new Set<Id>());
+            }
+            if (!userIds.isEmpty()) {
+                for (PermissionSetAssignment psa : [
+                    SELECT AssigneeId, PermissionSetId
+                    FROM PermissionSetAssignment
+                    WHERE AssigneeId IN :userIds
+                ]) {
+                    if (userPermSets.containsKey(psa.AssigneeId)) {
+                        userPermSets.get(psa.AssigneeId).add(psa.PermissionSetId);
+                    }
+                }
+            }
+
+            // Stage 5: intersect, classify, and build remediation hints.
+            for (User u : users) {
+                UserCheckResult ucr = new UserCheckResult();
+                ucr.userId = u.Id;
+                ucr.name = u.Name;
+                ucr.username = u.Username;
+                ucr.isActive = u.IsActive;
+                ucr.isCurrentUser = (u.Id == currentUserId);
+
+                if (ucr.isCurrentUser) {
+                    ucr.roleLabel = 'Current admin';
+                } else if (u.Name != null && u.Name.startsWith('Platform')) {
+                    ucr.roleLabel = 'Platform Integration User';
+                } else {
+                    ucr.roleLabel = 'Custom check';
+                }
+
+                ucr.grantingPermSetsForExternalCredential = new List<String>();
+                ucr.grantingPermSetsForUec = new List<String>();
+
+                Set<Id> assigned = userPermSets.get(u.Id);
+                if (assigned == null) {
+                    assigned = new Set<Id>();
+                }
+                for (Id psId : assigned) {
+                    if (permSetsGrantingExternalCredentialIds.contains(psId)) {
+                        String lbl = permSetLabels.get(psId);
+                        if (lbl != null && !ucr.grantingPermSetsForExternalCredential.contains(lbl)) {
+                            ucr.grantingPermSetsForExternalCredential.add(lbl);
+                        }
+                    }
+                    if (permSetsGrantingUecIds.contains(psId)) {
+                        String lbl = permSetLabels.get(psId);
+                        if (lbl != null && !ucr.grantingPermSetsForUec.contains(lbl)) {
+                            ucr.grantingPermSetsForUec.add(lbl);
+                        }
+                    }
+                }
+
+                ucr.hasExternalCredentialAccess = !ucr.grantingPermSetsForExternalCredential.isEmpty();
+                ucr.hasUecRead = !ucr.grantingPermSetsForUec.isEmpty();
+
+                List<String> missing = new List<String>();
+                if (!ucr.hasExternalCredentialAccess) {
+                    missing.add('Access to an ExternalCredentialParameter');
+                }
+                if (!ucr.hasUecRead) {
+                    missing.add('Read on UserExternalCredential');
+                }
+                if (missing.isEmpty()) {
+                    ucr.fixHint = 'Heuristic check passed: user has a Permission ' +
+                        'Set granting ExternalCredentialParameter access and ' +
+                        'Read on UserExternalCredential. (The principal cannot ' +
+                        'be tied to this specific MCP from Apex; verify via Setup ' +
+                        'if behavior is still broken.)';
+                } else {
+                    ucr.fixHint = 'Missing: ' + String.join(missing, '; ') +
+                        '. Assign a Permission Set that grants these ' +
+                        'to ' + (ucr.name != null ? ucr.name : 'this user') + '.';
+                }
+
+                result.userResults.add(ucr);
+            }
+
+            return result;
+
+        } catch (AuraHandledException e) {
+            throw e;
+        } catch (Exception e) {
+            throw newAuraException(wrapWrapperError('runPermissionsDiagnostic', e));
+        }
+    }
+
+    /**
+     * Render a friendly label for the PermissionSet parent of a
+     * SetupEntityAccess / ObjectPermissions row, distinguishing
+     * profile-owned permission sets from standalone permission sets.
+     */
+    private static String labelForPermSetParent(PermissionSet parent) {
+        if (parent == null) {
+            return 'Unknown permission set';
+        }
+        if (parent.IsOwnedByProfile) {
+            String profileName = (parent.Profile != null && parent.Profile.Name != null)
+                ? parent.Profile.Name
+                : '(unknown)';
+            return 'Profile: ' + profileName;
+        }
+        String label = parent.Label != null ? parent.Label : parent.Name;
+        return 'Permission Set: ' + label;
+    }
+
+    /**
+     * Diagnostic payload returned to the LWC. All collection fields
+     * are always populated (possibly empty) so the client can render
+     * a stable table even when sub-queries fail and `warning` is set.
+     */
+    public class PermissionDiagnostic {
+        @AuraEnabled public String namedCredential;
+        @AuraEnabled public List<String> permSetsGrantingExternalCredential;
+        @AuraEnabled public List<String> permSetsGrantingUecRead;
+        @AuraEnabled public List<UserCheckResult> userResults;
+        @AuraEnabled public String warning;
+    }
+
+    /**
+     * Per-user diagnostic row. `grantingPermSetsForExternalCredential`
+     * and `grantingPermSetsForUec` are the intersection of the user's
+     * assigned permission sets with the permission sets that grant
+     * each access, so the LWC can show exactly which assignment is
+     * carrying the access (or surface that there is none).
+     */
+    public class UserCheckResult {
+        @AuraEnabled public Id userId;
+        @AuraEnabled public String name;
+        @AuraEnabled public String username;
+        @AuraEnabled public Boolean isActive;
+        @AuraEnabled public Boolean isCurrentUser;
+        @AuraEnabled public String roleLabel;
+        @AuraEnabled public Boolean hasExternalCredentialAccess;
+        @AuraEnabled public Boolean hasUecRead;
+        @AuraEnabled public List<String> grantingPermSetsForExternalCredential;
+        @AuraEnabled public List<String> grantingPermSetsForUec;
+        @AuraEnabled public String fixHint;
+    }
 }

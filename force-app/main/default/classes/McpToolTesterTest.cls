@@ -996,6 +996,143 @@ private class McpToolTesterTest {
       'Pin current behavior: empty input passes through (String.isNotBlank guard returns the input)');
   }
 
+  // ===================================================================
+  // Group 8 -- runPermissionsDiagnostic
+  //
+  // Verifies the read-only permissions diagnostic surfaces the
+  // current user, tolerates a missing Named Credential, accepts an
+  // optional Username for ad-hoc checks, and correctly parses
+  // namespace-qualified API names. Tests stay tolerant of org config
+  // (no real Platform% users or External Credentials required).
+  // ===================================================================
+
+  @isTest
+  static void testParseQualifiedName_PlainName_NoNamespace() {
+    String[] parts = McpToolTester.parseQualifiedName('PetStore');
+    System.assertEquals(null, parts[0], 'Plain names have no namespace prefix');
+    System.assertEquals('PetStore', parts[1], 'DeveloperName must be preserved');
+  }
+
+  @isTest
+  static void testParseQualifiedName_NamespacedName_Decomposed() {
+    String[] parts = McpToolTester.parseQualifiedName('mypkg__PetStore');
+    System.assertEquals('mypkg', parts[0], 'Namespace prefix must be extracted');
+    System.assertEquals('PetStore', parts[1], 'DeveloperName must follow the __ delimiter');
+  }
+
+  @isTest
+  static void testParseQualifiedName_Blank_HandledGracefully() {
+    String[] parts = McpToolTester.parseQualifiedName('');
+    System.assertEquals(null, parts[0], 'Blank input must not produce a namespace');
+    System.assertEquals('', parts[1], 'Blank input must round-trip as empty DeveloperName');
+  }
+
+  @isTest
+  static void testRunPermissionsDiagnostic_NamedCredentialMissing_ReturnsWarning() {
+    Test.startTest();
+    McpToolTester.PermissionDiagnostic diag = McpToolTester.runPermissionsDiagnostic(
+      'NonExistentMcpServer_' + System.currentTimeMillis(),
+      ''
+    );
+    Test.stopTest();
+
+    System.assertNotEquals(null, diag, 'Diagnostic must always be returned');
+    System.assertNotEquals(null, diag.warning,
+      'Missing Named Credential must populate `warning`');
+    System.assert(diag.warning.contains('not found'),
+      'Warning must explain the credential was not found: ' + diag.warning);
+    System.assertEquals(0, diag.principalNames.size(),
+      'No principals discoverable without a Named Credential');
+  }
+
+  @isTest
+  static void testRunPermissionsDiagnostic_CurrentUserAlwaysPresent() {
+    Test.startTest();
+    McpToolTester.PermissionDiagnostic diag = McpToolTester.runPermissionsDiagnostic(
+      'NonExistentMcpServer_' + System.currentTimeMillis(),
+      ''
+    );
+    Test.stopTest();
+
+    Boolean foundCurrent = false;
+    Id currentUserId = UserInfo.getUserId();
+    for (McpToolTester.UserCheckResult ucr : diag.userResults) {
+      if (ucr.userId == currentUserId) {
+        foundCurrent = true;
+        System.assert(ucr.isCurrentUser,
+          'Running user must be flagged isCurrentUser=true');
+        System.assertEquals('Current admin', ucr.roleLabel,
+          'Running user must carry the "Current admin" role label');
+        System.assertNotEquals(null, ucr.fixHint,
+          'Every row must carry a fixHint for the LWC to render');
+      }
+    }
+    System.assert(foundCurrent,
+      'Current user must always appear in userResults');
+  }
+
+  @isTest
+  static void testRunPermissionsDiagnostic_AdditionalUsername_TaggedCustomCheck() {
+    // Spin up a disposable user so we have a deterministic Username
+    // to pass as `additionalUsername` regardless of org config.
+    Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
+    String uniq = 'mcp.diag.' + System.currentTimeMillis();
+    User extra = new User(
+      ProfileId = p.Id,
+      Username = uniq + '@example.invalid',
+      Alias = 'mcpdg',
+      Email = 'mcp.diag@example.invalid',
+      EmailEncodingKey = 'UTF-8',
+      LastName = 'DiagTarget',
+      LanguageLocaleKey = 'en_US',
+      LocaleSidKey = 'en_US',
+      TimeZoneSidKey = 'America/Los_Angeles'
+    );
+    insert extra;
+
+    Test.startTest();
+    McpToolTester.PermissionDiagnostic diag = McpToolTester.runPermissionsDiagnostic(
+      'NonExistentMcpServer_' + System.currentTimeMillis(),
+      extra.Username
+    );
+    Test.stopTest();
+
+    Boolean foundExtra = false;
+    for (McpToolTester.UserCheckResult ucr : diag.userResults) {
+      if (ucr.userId == extra.Id) {
+        foundExtra = true;
+        System.assertEquals('Custom check', ucr.roleLabel,
+          'Ad-hoc users must be tagged Custom check (not Platform/Current)');
+        System.assertEquals(extra.Username, ucr.username,
+          'Username must round-trip onto the UserCheckResult');
+        System.assertEquals(false, ucr.isCurrentUser,
+          'Inserted user must not be flagged isCurrentUser');
+      }
+    }
+    System.assert(foundExtra,
+      'Custom user provided as additionalUsername must appear in userResults');
+  }
+
+  @isTest
+  static void testRunPermissionsDiagnostic_BlankAdditionalUsername_DoesNotCollideWithReal() {
+    // Pin that the sentinel used when additionalUsername is blank
+    // cannot accidentally match a real username. We rely on the
+    // sentinel being far outside the realm of valid Salesforce
+    // usernames; this test guards against future refactors that
+    // might use '' (which is a falsy match in some platforms).
+    Test.startTest();
+    McpToolTester.PermissionDiagnostic diag = McpToolTester.runPermissionsDiagnostic(
+      'NonExistentMcpServer_' + System.currentTimeMillis(),
+      null
+    );
+    Test.stopTest();
+
+    for (McpToolTester.UserCheckResult ucr : diag.userResults) {
+      System.assertNotEquals('Custom check', ucr.roleLabel,
+        'No row should be tagged Custom check when additionalUsername is blank: ' + ucr);
+    }
+  }
+
   /**
    * Mock HTTP Response class for testing
    */
