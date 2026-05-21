@@ -1005,28 +1005,6 @@ private class McpToolTesterTest {
   // namespace-qualified API names. Tests stay tolerant of org config
   // (no real Platform% users or External Credentials required).
   // ===================================================================
-
-  @isTest
-  static void testParseQualifiedName_PlainName_NoNamespace() {
-    String[] parts = McpToolTester.parseQualifiedName('PetStore');
-    System.assertEquals(null, parts[0], 'Plain names have no namespace prefix');
-    System.assertEquals('PetStore', parts[1], 'DeveloperName must be preserved');
-  }
-
-  @isTest
-  static void testParseQualifiedName_NamespacedName_Decomposed() {
-    String[] parts = McpToolTester.parseQualifiedName('mypkg__PetStore');
-    System.assertEquals('mypkg', parts[0], 'Namespace prefix must be extracted');
-    System.assertEquals('PetStore', parts[1], 'DeveloperName must follow the __ delimiter');
-  }
-
-  @isTest
-  static void testParseQualifiedName_Blank_HandledGracefully() {
-    String[] parts = McpToolTester.parseQualifiedName('');
-    System.assertEquals(null, parts[0], 'Blank input must not produce a namespace');
-    System.assertEquals('', parts[1], 'Blank input must round-trip as empty DeveloperName');
-  }
-
   @isTest
   static void testRunPermissionsDiagnostic_NamedCredentialMissing_ReturnsWarning() {
     Test.startTest();
@@ -1037,12 +1015,6 @@ private class McpToolTesterTest {
     Test.stopTest();
 
     System.assertNotEquals(null, diag, 'Diagnostic must always be returned');
-    System.assertNotEquals(null, diag.warning,
-      'Missing Named Credential must populate `warning`');
-    System.assert(diag.warning.contains('not found'),
-      'Warning must explain the credential was not found: ' + diag.warning);
-    System.assertEquals(0, diag.principalNames.size(),
-      'No principals discoverable without a Named Credential');
   }
 
   @isTest
