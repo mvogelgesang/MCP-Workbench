@@ -56,11 +56,13 @@ private class McpToolTesterTest {
     );
 
     Test.startTest();
-    String result = McpToolTester.initializeConnection('TestServer');
+    McpToolTester.McpResponse result = McpToolTester.initializeConnection('TestServer');
     Test.stopTest();
 
-    System.assertNotEquals(null, result);
-    System.assert(result.contains('serverInfo'));
+    System.assertNotEquals(null, result, 'initializeConnection must return a non-null McpResponse');
+    System.assertNotEquals(null, result.body, 'McpResponse.body must carry the server payload');
+    System.assert(result.body.contains('serverInfo'),
+      'serverInfo from the InitializeResponse must round-trip through .body');
   }
 
   @isTest
@@ -75,12 +77,14 @@ private class McpToolTesterTest {
     );
 
     Test.startTest();
-    String result = McpToolTester.getAvailableTools('TestServer');
+    McpToolTester.McpResponse result = McpToolTester.getAvailableTools('TestServer', null, null);
     Test.stopTest();
 
-    System.assertNotEquals(null, result);
-    System.assert(result.contains('tools'));
-    System.assert(result.contains('testTool'));
+    System.assertNotEquals(null, result, 'getAvailableTools must return a non-null McpResponse');
+    System.assert(result.body.contains('tools'),
+      'tools payload must round-trip through .body');
+    System.assert(result.body.contains('testTool'),
+      'tool name must round-trip through .body');
   }
 
   @isTest
@@ -95,11 +99,12 @@ private class McpToolTesterTest {
     );
 
     Test.startTest();
-    String result = McpToolTester.getAvailableResources('TestServer');
+    McpToolTester.McpResponse result = McpToolTester.getAvailableResources('TestServer', null, null);
     Test.stopTest();
 
-    System.assertNotEquals(null, result);
-    System.assert(result.contains('resources'));
+    System.assertNotEquals(null, result, 'getAvailableResources must return a non-null McpResponse');
+    System.assert(result.body.contains('resources'),
+      'resources payload must round-trip through .body');
   }
 
   @isTest
@@ -111,15 +116,18 @@ private class McpToolTesterTest {
     );
 
     Test.startTest();
-    String result = McpToolTester.callTool(
+    McpToolTester.McpResponse result = McpToolTester.callTool(
       'TestServer',
       'testTool',
-      '{"param1":"value1"}'
+      '{"param1":"value1"}',
+      null,
+      null
     );
     Test.stopTest();
 
-    System.assertNotEquals(null, result);
-    System.assert(result.contains('content'));
+    System.assertNotEquals(null, result, 'callTool must return a non-null McpResponse');
+    System.assert(result.body.contains('content'),
+      'tool content must round-trip through .body');
   }
 
   @isTest
@@ -131,11 +139,14 @@ private class McpToolTesterTest {
     );
 
     Test.startTest();
-    String result = McpToolTester.callTool('TestServer', 'testTool', '');
+    McpToolTester.McpResponse result = McpToolTester.callTool(
+      'TestServer', 'testTool', '', null, null
+    );
     Test.stopTest();
 
-    System.assertNotEquals(null, result);
-    System.assert(result.contains('content'));
+    System.assertNotEquals(null, result, 'callTool must return a non-null McpResponse');
+    System.assert(result.body.contains('content'),
+      'tool content must round-trip through .body');
   }
 
   @isTest
@@ -150,7 +161,7 @@ private class McpToolTesterTest {
 
     Test.startTest();
     try {
-      McpToolTester.callTool('TestServer', 'testTool', '{"invalid":"param"}');
+      McpToolTester.callTool('TestServer', 'testTool', '{"invalid":"param"}', null, null);
       System.assert(false, 'Expected exception was not thrown');
     } catch (AuraHandledException e) {
       String errorMessage = e.getMessage();
@@ -738,9 +749,9 @@ private class McpToolTesterTest {
     try {
       switch on which {
         when INITIALIZE { McpToolTester.initializeConnection('TestServer'); }
-        when LIST_TOOLS { McpToolTester.getAvailableTools('TestServer'); }
-        when LIST_RESOURCES { McpToolTester.getAvailableResources('TestServer'); }
-        when CALL_TOOL { McpToolTester.callTool('TestServer', 'someTool', '{}'); }
+        when LIST_TOOLS { McpToolTester.getAvailableTools('TestServer', null, null); }
+        when LIST_RESOURCES { McpToolTester.getAvailableResources('TestServer', null, null); }
+        when CALL_TOOL { McpToolTester.callTool('TestServer', 'someTool', '{}', null, null); }
       }
       System.assert(false, 'Expected AuraHandledException from ' + which);
       return null;
@@ -1102,6 +1113,313 @@ private class McpToolTesterTest {
     for (McpToolTester.UserCheckResult ucr : diag.userResults) {
       System.assertNotEquals('Custom check', ucr.roleLabel,
         'No row should be tagged Custom check when additionalUsername is blank: ' + ucr);
+    }
+  }
+
+  // ===================================================================
+  // Group 9 -- MCP 2025-06-18 session management
+  //
+  // Pins the Streamable HTTP transport contract:
+  //   - initializeConnection captures the server's Mcp-Session-Id.
+  //   - Subsequent calls echo Mcp-Session-Id + MCP-Protocol-Version.
+  //   - 404 on a request carrying Mcp-Session-Id surfaces
+  //     `sessionExpired: true` on the structured error payload.
+  //   - sendInitializedNotification routes notifications/initialized
+  //     through executeMcp (so the same headers apply).
+  //   - terminateSession sends DELETE and tolerates 405.
+  // ===================================================================
+
+  @isTest
+  static void testInitializeConnection_CapturesSessionIdHeader() {
+    McpMockSessionAware mock = new McpMockSessionAware(
+      200,
+      '{"jsonrpc":"2.0","result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"t","version":"1"}},"id":1}',
+      'svr-session-abc123'
+    );
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    McpToolTester.McpResponse result = McpToolTester.initializeConnection('TestServer');
+    Test.stopTest();
+
+    System.assertEquals('svr-session-abc123', result.sessionId,
+      'initializeConnection must surface the Mcp-Session-Id header on McpResponse.sessionId');
+    System.assertEquals(200, result.statusCode,
+      'McpResponse.statusCode must mirror the HTTP status on success');
+    System.assertEquals(false, result.sessionExpired,
+      'sessionExpired must be false on a 2xx response');
+    System.assertEquals('POST', mock.capturedMethod,
+      'initialize must use HTTP POST per Streamable HTTP spec');
+    System.assertEquals(null, mock.capturedSessionId,
+      'initialize itself must NOT send an Mcp-Session-Id header (no session exists yet)');
+    System.assertEquals(null, mock.capturedProtocolVersion,
+      'initialize must NOT send MCP-Protocol-Version until a version has been negotiated');
+  }
+
+  @isTest
+  static void testInitializeConnection_NoSessionIdHeader_LeavesSessionIdNull() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockSessionAware(
+        200,
+        '{"jsonrpc":"2.0","result":{"protocolVersion":"2025-06-18"},"id":1}',
+        null
+      )
+    );
+
+    Test.startTest();
+    McpToolTester.McpResponse result = McpToolTester.initializeConnection('TestServer');
+    Test.stopTest();
+
+    System.assertEquals(null, result.sessionId,
+      'A server that omits Mcp-Session-Id must leave McpResponse.sessionId null');
+  }
+
+  @isTest
+  static void testCallTool_SendsSessionAndProtocolHeaders() {
+    McpMockSessionAware mock = new McpMockSessionAware(
+      200,
+      '{"jsonrpc":"2.0","result":{"content":[]},"id":99}',
+      null
+    );
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    McpToolTester.callTool('TestServer', 'ping', '{}', 'svr-session-xyz', '2025-06-18');
+    Test.stopTest();
+
+    System.assertEquals('svr-session-xyz', mock.capturedSessionId,
+      'callTool must forward Mcp-Session-Id on every subsequent request');
+    System.assertEquals('2025-06-18', mock.capturedProtocolVersion,
+      'callTool must forward MCP-Protocol-Version on every subsequent request');
+    System.assertEquals('POST', mock.capturedMethod,
+      'tool calls use POST');
+  }
+
+  @isTest
+  static void testGetAvailableTools_SendsSessionAndProtocolHeaders() {
+    McpMockSessionAware mock = new McpMockSessionAware(
+      200,
+      '{"jsonrpc":"2.0","result":{"tools":[]},"id":7}',
+      null
+    );
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    McpToolTester.getAvailableTools('TestServer', 'sid-1', '2025-06-18');
+    Test.stopTest();
+
+    System.assertEquals('sid-1', mock.capturedSessionId,
+      'getAvailableTools must forward Mcp-Session-Id');
+    System.assertEquals('2025-06-18', mock.capturedProtocolVersion,
+      'getAvailableTools must forward MCP-Protocol-Version');
+  }
+
+  @isTest
+  static void testGetAvailableResources_SendsSessionAndProtocolHeaders() {
+    McpMockSessionAware mock = new McpMockSessionAware(
+      200,
+      '{"jsonrpc":"2.0","result":{"resources":[]},"id":7}',
+      null
+    );
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    McpToolTester.getAvailableResources('TestServer', 'sid-2', '2025-06-18');
+    Test.stopTest();
+
+    System.assertEquals('sid-2', mock.capturedSessionId,
+      'getAvailableResources must forward Mcp-Session-Id');
+    System.assertEquals('2025-06-18', mock.capturedProtocolVersion,
+      'getAvailableResources must forward MCP-Protocol-Version');
+  }
+
+  @isTest
+  static void testCallTool_404WithSessionId_FlagsSessionExpired() {
+    // Per spec: HTTP 404 in response to a request carrying an
+    // Mcp-Session-Id signals server-side session termination and the
+    // client MUST start a new session.
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockSessionAware(404, 'Not Found', null)
+    );
+
+    Test.startTest();
+    try {
+      McpToolTester.callTool('TestServer', 't', '{}', 'svr-session-doomed', '2025-06-18');
+      System.assert(false, 'Expected AuraHandledException for 404');
+    } catch (AuraHandledException e) {
+      String msg = e.getMessage();
+      System.assert(msg.contains('"sessionExpired":true'),
+        'sessionExpired:true must be set on the error payload for 404+session: ' + msg);
+      System.assert(msg.contains('start a new session'),
+        'Explanation must point the user at the re-init recovery path: ' + msg);
+    }
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testCallTool_404WithoutSessionId_NoSessionExpiredFlag() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockSessionAware(404, 'Not Found', null)
+    );
+
+    Test.startTest();
+    try {
+      McpToolTester.callTool('TestServer', 't', '{}', null, '2025-06-18');
+      System.assert(false, 'Expected AuraHandledException for 404');
+    } catch (AuraHandledException e) {
+      String msg = e.getMessage();
+      System.assert(!msg.contains('"sessionExpired":true'),
+        'sessionExpired must NOT be set when no Mcp-Session-Id was sent: ' + msg);
+    }
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testSendInitializedNotification_PostsNotificationWithSession() {
+    McpMockSessionAware mock = new McpMockSessionAware(202, '', null);
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    McpToolTester.McpResponse result = McpToolTester.sendInitializedNotification(
+      'TestServer', 'sid-init', '2025-06-18'
+    );
+    Test.stopTest();
+
+    System.assertEquals(202, result.statusCode,
+      'notifications/initialized must accept 202 from the server');
+    System.assertEquals('sid-init', mock.capturedSessionId,
+      'notifications/initialized must carry the session header');
+    System.assertEquals('2025-06-18', mock.capturedProtocolVersion,
+      'notifications/initialized must carry the protocol-version header');
+    System.assert(mock.capturedBody != null
+                  && mock.capturedBody.contains('"method":"notifications/initialized"'),
+      'Body must be the JSON-RPC notification, not a request (no id field): ' + mock.capturedBody);
+    System.assert(mock.capturedBody.indexOf('"id"') == -1,
+      'JSON-RPC notifications must not carry an id field: ' + mock.capturedBody);
+  }
+
+  @isTest
+  static void testTerminateSession_SendsDeleteWithSessionHeader() {
+    McpMockSessionAware mock = new McpMockSessionAware(200, '', null);
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    McpToolTester.McpResponse result = McpToolTester.terminateSession('TestServer', 'sid-terminate');
+    Test.stopTest();
+
+    System.assertNotEquals(null, result,
+      'terminateSession must always return a (possibly stub) McpResponse');
+    System.assertEquals('DELETE', mock.capturedMethod,
+      'terminateSession must use HTTP DELETE per the 2025-06-18 spec');
+    System.assertEquals('sid-terminate', mock.capturedSessionId,
+      'terminateSession must carry the Mcp-Session-Id to identify which session to drop');
+  }
+
+  @isTest
+  static void testTerminateSession_405MethodNotAllowed_SwallowsError() {
+    // Spec: server MAY respond 405 to a DELETE if it doesn't allow
+    // client-initiated termination. terminateSession must not bubble
+    // an exception in this case so the LWC can safely fire-and-forget.
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockSessionAware(405, 'Method Not Allowed', null)
+    );
+
+    Test.startTest();
+    McpToolTester.McpResponse result = McpToolTester.terminateSession('TestServer', 'sid-here');
+    Test.stopTest();
+
+    System.assertNotEquals(null, result,
+      'terminateSession must return a stub McpResponse even when the server returns 405');
+  }
+
+  @isTest
+  static void testTerminateSession_BlankSessionId_NoOpReturnsStub() {
+    // When we never had a session ID, there is nothing to DELETE.
+    // Pin that terminateSession returns a stub without issuing the
+    // callout (no mock necessary -- a callout here would throw).
+    Test.startTest();
+    McpToolTester.McpResponse result = McpToolTester.terminateSession('TestServer', '');
+    Test.stopTest();
+
+    System.assertNotEquals(null, result,
+      'terminateSession must return a non-null stub when no session ID is held');
+  }
+
+  @isTest
+  static void testCallMcpServer_LegacyEntrypoint_ReturnsRawBody() {
+    // The pre-session-management entrypoint stays backward
+    // compatible: it returns the raw response body as String,
+    // delegating internally to executeMcp(null session, null
+    // protocol). This keeps any external scripts/integrations
+    // working unchanged.
+    McpMockSessionAware mock = new McpMockSessionAware(
+      200,
+      '{"jsonrpc":"2.0","result":{"ok":true},"id":1}',
+      null
+    );
+    Test.setMock(HttpCalloutMock.class, mock);
+
+    Test.startTest();
+    String body = McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"ping"}');
+    Test.stopTest();
+
+    System.assertEquals('{"jsonrpc":"2.0","result":{"ok":true},"id":1}', body,
+      'callMcpServer must continue returning the raw response body as String');
+    System.assertEquals(null, mock.capturedSessionId,
+      'Legacy callMcpServer must NOT add an Mcp-Session-Id header');
+    System.assertEquals(null, mock.capturedProtocolVersion,
+      'Legacy callMcpServer must NOT add an MCP-Protocol-Version header');
+  }
+
+  /**
+   * Session-aware HTTP mock for Group 9 tests. Captures the most
+   * recent request's headers, method, and body so tests can assert
+   * the spec-required headers were sent. Optionally returns an
+   * Mcp-Session-Id on the response for initialize tests.
+   *
+   * NOTE: deliberately not validating Content-Type/Accept here
+   * (unlike McpMockHttpResponse) because DELETE requests in this
+   * codebase do not include a request body and some servers care
+   * about the absence of Content-Type for bodyless requests.
+   */
+  private class McpMockSessionAware implements HttpCalloutMock {
+    private Integer statusCode;
+    private String body;
+    private String responseSessionId;
+
+    public String capturedSessionId;
+    public String capturedProtocolVersion;
+    public String capturedMethod;
+    public String capturedBody;
+
+    public McpMockSessionAware(Integer statusCode, String body, String responseSessionId) {
+      this.statusCode = statusCode;
+      this.body = body;
+      this.responseSessionId = responseSessionId;
+    }
+
+    public HttpResponse respond(HttpRequest req) {
+      capturedSessionId = req.getHeader('Mcp-Session-Id');
+      capturedProtocolVersion = req.getHeader('MCP-Protocol-Version');
+      capturedMethod = req.getMethod();
+      capturedBody = req.getBody();
+
+      System.assert(req.getEndpoint().startsWith('callout:'),
+        'Endpoint should use Named Credential format');
+
+      HttpResponse res = new HttpResponse();
+      res.setStatusCode(statusCode);
+      res.setStatus(statusCode >= 200 && statusCode < 300 ? 'OK' : 'Error');
+      res.setBody(body == null ? '' : body);
+      if (String.isNotBlank(responseSessionId)) {
+        res.setHeader('Mcp-Session-Id', responseSessionId);
+      }
+      res.setHeader('Content-Type', 'application/json');
+      return res;
     }
   }
 

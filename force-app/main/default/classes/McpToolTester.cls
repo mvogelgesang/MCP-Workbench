@@ -1,57 +1,123 @@
 public with sharing class McpToolTester {
-    
+
     /**
-     * Makes a callout to any MCP server via Named Credential
-     * @param namedCredential - The Named Credential API name (e.g., 'PetStore', 'news', 'notion2')
-     * @param requestBody - JSON-RPC request body as string
-     * @return String - Response from MCP server (or error details in JSON format)
+     * MCP "Streamable HTTP" session-management headers as defined by
+     * https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management.
+     *
+     * The header names are cased per the spec text. Apex header
+     * matching is case-insensitive on the response side, but the
+     * server we are calling may not be -- so we send these casings
+     * verbatim.
+     */
+    @TestVisible
+    private static final String HEADER_SESSION_ID = 'Mcp-Session-Id';
+    @TestVisible
+    private static final String HEADER_PROTOCOL_VERSION = 'MCP-Protocol-Version';
+
+    /**
+     * Legacy AuraEnabled entrypoint. Sends a POST without an
+     * `Mcp-Session-Id` or `MCP-Protocol-Version` header and returns
+     * the raw response body as a String. Retained so existing
+     * scripts / tests that call callMcpServer directly keep working;
+     * new code should go through the higher-level methods which
+     * return McpResponse and propagate the session lifecycle.
      */
     @AuraEnabled
     public static String callMcpServer(String namedCredential, String requestBody) {
+        McpResponse r = executeMcp(namedCredential, requestBody, null, null, 'POST');
+        return r.body;
+    }
+
+    /**
+     * Core HTTP helper that implements the MCP 2025-06-18 Streamable
+     * HTTP transport contract:
+     *
+     *   - Adds `Mcp-Session-Id` when the caller supplies one.
+     *   - Adds `MCP-Protocol-Version` when the caller supplies one
+     *     (per spec, only after the version is negotiated during
+     *     initialization).
+     *   - Captures the server-returned `Mcp-Session-Id` so callers
+     *     (initializeConnection) can stash it for the rest of the
+     *     session.
+     *   - Detects the spec-defined "server expired our session"
+     *     signal (HTTP 404 while we held a session ID) and surfaces
+     *     it as `sessionExpired = true` on the structured error
+     *     payload, so the LWC can transparently re-initialize.
+     *
+     * httpMethod is one of 'POST', 'GET', or 'DELETE'. For DELETE
+     * (session termination), no body is sent.
+     */
+    private static McpResponse executeMcp(
+        String namedCredential,
+        String requestBody,
+        String sessionId,
+        String protocolVersion,
+        String httpMethod
+    ) {
         HttpRequest req = new HttpRequest();
         HttpResponse res;
-        
+        String method = String.isNotBlank(httpMethod) ? httpMethod : 'POST';
+
         try {
-            // Use the Named Credential callout with dynamic server name
             req.setEndpoint('callout:' + namedCredential);
-            req.setMethod('POST');
-            
-            // Set the required headers for MCP protocol
+            req.setMethod(method);
             req.setHeader('Content-Type', 'application/json');
             req.setHeader('Accept', 'application/json, text/event-stream');
-            
-            // Set the JSON-RPC request body
-            req.setBody(requestBody);
-            
-            // Set timeout (120 seconds max)
+
+            if (String.isNotBlank(sessionId)) {
+                req.setHeader(HEADER_SESSION_ID, sessionId);
+            }
+            if (String.isNotBlank(protocolVersion)) {
+                req.setHeader(HEADER_PROTOCOL_VERSION, protocolVersion);
+            }
+            if (String.isNotBlank(requestBody) && method != 'DELETE') {
+                req.setBody(requestBody);
+            }
+
             req.setTimeout(120000);
-            
-            // Log request details for debugging
-            System.debug('MCP Request to: callout:' + namedCredential);
+
+            System.debug('MCP Request to: callout:' + namedCredential + ' (' + method + ')');
             System.debug('Request Body: ' + requestBody);
-            
+
             Http http = new Http();
             res = http.send(req);
-            
-            // Log response details
-            System.debug('Response Status Code: ' + res.getStatusCode());
+
+            Integer code = res.getStatusCode();
+            String responseSessionId = res.getHeader(HEADER_SESSION_ID);
+            Boolean sessionExpiredFlag = (code == 404 && String.isNotBlank(sessionId));
+
+            System.debug('Response Status Code: ' + code);
             System.debug('Response Status: ' + res.getStatus());
             System.debug('Response Body: ' + res.getBody());
-            
-            if (res.getStatusCode() >= 200 && res.getStatusCode() < 300) {
-                return res.getBody();
+
+            if (code >= 200 && code < 300) {
+                McpResponse out = new McpResponse();
+                out.body = res.getBody();
+                out.statusCode = code;
+                out.sessionId = responseSessionId;
+                out.sessionExpired = false;
+                return out;
             }
 
             String rawBody = res.getBody();
             Map<String, Object> errorDetails = new Map<String, Object>{
                 '_error' => true,
-                'statusCode' => res.getStatusCode(),
+                'statusCode' => code,
                 'status' => res.getStatus(),
                 'endpoint' => 'callout:' + namedCredential,
-                'method' => 'POST',
+                'method' => method,
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
                 'rawResponse' => truncateForAura(rawBody)
             };
+
+            if (sessionExpiredFlag) {
+                // Spec: "When a client receives HTTP 404 in response to
+                // a request containing an Mcp-Session-Id, it MUST start
+                // a new session by sending a new InitializeRequest
+                // without a session ID attached." The LWC keys off this
+                // flag to do exactly that.
+                errorDetails.put('sessionExpired', true);
+            }
 
             try {
                 Object parsed = JSON.deserializeUntyped(rawBody);
@@ -67,13 +133,16 @@ public with sharing class McpToolTester {
 
             errorDetails.put(
                 'explanation',
-                getErrorExplanation(res.getStatusCode(), namedCredential, rawBody)
+                sessionExpiredFlag
+                    ? 'The MCP server returned 404 for a request carrying our Mcp-Session-Id. ' +
+                      'Per the MCP 2025-06-18 spec, this means the session was terminated server-side. ' +
+                      'Start a new session by re-running Connect (the workbench will do this automatically).'
+                    : getErrorExplanation(code, namedCredential, rawBody)
             );
 
             throw newAuraException(JSON.serialize(errorDetails));
 
         } catch (AuraHandledException e) {
-            // Already shaped for the LWC; let it propagate untouched.
             throw e;
 
         } catch (System.CalloutException e) {
@@ -82,6 +151,7 @@ public with sharing class McpToolTester {
                 'type' => 'CalloutException',
                 'message' => e.getMessage(),
                 'endpoint' => 'callout:' + namedCredential,
+                'method' => method,
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
                 'explanation' => getCalloutErrorExplanation(e.getMessage(), namedCredential)
             };
@@ -98,6 +168,7 @@ public with sharing class McpToolTester {
                 'message' => e.getMessage(),
                 'stackTrace' => e.getStackTraceString(),
                 'endpoint' => 'callout:' + namedCredential,
+                'method' => method,
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss')
             };
 
@@ -106,6 +177,23 @@ public with sharing class McpToolTester {
 
             throw newAuraException(JSON.serialize(errorDetails));
         }
+    }
+
+    /**
+     * Wrapper response for MCP HTTP calls. `body` carries the raw
+     * response body the LWC parses today (JSON or SSE). `sessionId`
+     * is the `Mcp-Session-Id` the server returned on this response
+     * (only populated on initializeConnection in practice, but
+     * forwarded on every call so the LWC can adapt if the server
+     * decides to rotate). `sessionExpired` is reserved for the
+     * 404-with-session path surfaced via the structured error
+     * payload; on success it is always false.
+     */
+    public class McpResponse {
+        @AuraEnabled public String body;
+        @AuraEnabled public Integer statusCode;
+        @AuraEnabled public String sessionId;
+        @AuraEnabled public Boolean sessionExpired;
     }
 
     /**
@@ -288,93 +376,111 @@ public with sharing class McpToolTester {
     }
     
     /**
-     * Call a specific MCP tool with parameters
-     * @param namedCredential - The Named Credential API name
-     * @param toolName - Name of the tool to call
-     * @param parameters - JSON string of parameters for the tool
-     * @return String - Response from the tool
+     * Call a specific MCP tool with parameters.
+     *
+     * Per the MCP 2025-06-18 Streamable HTTP spec, every request
+     * after `initialize` MUST carry the `Mcp-Session-Id` (if the
+     * server assigned one) and the `MCP-Protocol-Version` the
+     * client negotiated. The LWC tracks both and passes them in.
      */
     @AuraEnabled
-    public static String callTool(String namedCredential, String toolName, String parameters) {
+    public static McpResponse callTool(
+        String namedCredential,
+        String toolName,
+        String parameters,
+        String sessionId,
+        String protocolVersion
+    ) {
         try {
-            // Build the JSON-RPC request for tools/call
             Map<String, Object> request = new Map<String, Object>{
                 'jsonrpc' => '2.0',
                 'id' => generateRequestId(),
                 'method' => 'tools/call',
                 'params' => new Map<String, Object>{
                     'name' => toolName,
-                    'arguments' => String.isNotBlank(parameters) 
+                    'arguments' => String.isNotBlank(parameters)
                         ? (Map<String, Object>)JSON.deserializeUntyped(parameters)
                         : new Map<String, Object>()
                 }
             };
-            
+
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
-            
+            return executeMcp(namedCredential, requestBody, sessionId, protocolVersion, 'POST');
+
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
             throw newAuraException(wrapWrapperError('callTool', e));
         }
     }
-    
+
     /**
-     * Get available tools from the MCP server
-     * @param namedCredential - The Named Credential API name
-     * @return String - JSON response with tools list
+     * Get available tools from the MCP server. Carries the
+     * negotiated session ID and protocol version so the server can
+     * scope the response to this client's session per the
+     * 2025-06-18 spec.
      */
     @AuraEnabled
-    public static String getAvailableTools(String namedCredential) {
+    public static McpResponse getAvailableTools(
+        String namedCredential,
+        String sessionId,
+        String protocolVersion
+    ) {
         try {
             Map<String, Object> request = new Map<String, Object>{
                 'jsonrpc' => '2.0',
                 'id' => generateRequestId(),
                 'method' => 'tools/list'
             };
-            
+
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
-            
+            return executeMcp(namedCredential, requestBody, sessionId, protocolVersion, 'POST');
+
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
             throw newAuraException(wrapWrapperError('getAvailableTools', e));
         }
     }
-    
+
     /**
-     * Get available resources from the MCP server
-     * @param namedCredential - The Named Credential API name
-     * @return String - JSON response with resources list
+     * Get available resources from the MCP server. Same session
+     * headers as getAvailableTools.
      */
     @AuraEnabled
-    public static String getAvailableResources(String namedCredential) {
+    public static McpResponse getAvailableResources(
+        String namedCredential,
+        String sessionId,
+        String protocolVersion
+    ) {
         try {
             Map<String, Object> request = new Map<String, Object>{
                 'jsonrpc' => '2.0',
                 'id' => generateRequestId(),
                 'method' => 'resources/list'
             };
-            
+
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
-            
+            return executeMcp(namedCredential, requestBody, sessionId, protocolVersion, 'POST');
+
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
             throw newAuraException(wrapWrapperError('getAvailableResources', e));
         }
     }
-    
+
     /**
-     * Initialize connection to MCP server
-     * @param namedCredential - The Named Credential API name
-     * @return String - JSON response with server info
+     * Initialize the MCP session. By spec, this is the only call
+     * that runs without an `Mcp-Session-Id` and without an
+     * `MCP-Protocol-Version` header -- both are server-determined
+     * /negotiated from this exchange. The server MAY return an
+     * `Mcp-Session-Id` on the response; if it does, the LWC stashes
+     * it on McpResponse.sessionId and passes it back on every
+     * subsequent call.
      */
     @AuraEnabled
-    public static String initializeConnection(String namedCredential) {
+    public static McpResponse initializeConnection(String namedCredential) {
         try {
             Map<String, Object> request = new Map<String, Object>{
                 'jsonrpc' => '2.0',
@@ -389,15 +495,87 @@ public with sharing class McpToolTester {
                     }
                 }
             };
-            
+
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
-            
+            return executeMcp(namedCredential, requestBody, null, null, 'POST');
+
         } catch (AuraHandledException e) {
             throw e;
         } catch (Exception e) {
             System.debug('Error initializing: ' + e.getMessage());
             throw newAuraException(wrapWrapperError('initializeConnection', e));
+        }
+    }
+
+    /**
+     * Sends the spec-required `notifications/initialized`
+     * notification after the LWC has parsed a successful
+     * InitializeResponse. JSON-RPC notifications carry no `id` and
+     * receive HTTP 202 Accepted with an empty body; we still go
+     * through executeMcp so session/protocol headers are applied.
+     *
+     * Failures here are non-fatal -- the LWC fire-and-forgets this
+     * call and continues even if the notification is rejected, so a
+     * misbehaving server cannot block the workbench.
+     */
+    @AuraEnabled
+    public static McpResponse sendInitializedNotification(
+        String namedCredential,
+        String sessionId,
+        String protocolVersion
+    ) {
+        try {
+            Map<String, Object> request = new Map<String, Object>{
+                'jsonrpc' => '2.0',
+                'method' => 'notifications/initialized'
+            };
+            String requestBody = JSON.serialize(request);
+            return executeMcp(namedCredential, requestBody, sessionId, protocolVersion, 'POST');
+
+        } catch (AuraHandledException e) {
+            throw e;
+        } catch (Exception e) {
+            throw newAuraException(wrapWrapperError('sendInitializedNotification', e));
+        }
+    }
+
+    /**
+     * Best-effort session termination via HTTP DELETE on the MCP
+     * endpoint, carrying `Mcp-Session-Id`. Per spec the server MAY
+     * respond with 405 Method Not Allowed (DELETE not supported);
+     * we swallow that and any other failure so the LWC can call
+     * this on navigation without crashing the UI. Even when the
+     * server rejects the DELETE the local session state is cleared.
+     */
+    @AuraEnabled
+    public static McpResponse terminateSession(
+        String namedCredential,
+        String sessionId
+    ) {
+        if (String.isBlank(sessionId)) {
+            McpResponse noop = new McpResponse();
+            noop.body = '';
+            noop.statusCode = 0;
+            noop.sessionExpired = false;
+            return noop;
+        }
+        try {
+            return executeMcp(namedCredential, null, sessionId, null, 'DELETE');
+        } catch (AuraHandledException e) {
+            // 405 (Method Not Allowed) and other rejections are
+            // expected per spec; surface a stub response so the LWC
+            // can clear local state regardless.
+            McpResponse stub = new McpResponse();
+            stub.body = e.getMessage();
+            stub.statusCode = 0;
+            stub.sessionExpired = false;
+            return stub;
+        } catch (Exception e) {
+            McpResponse stub = new McpResponse();
+            stub.body = e.getMessage();
+            stub.statusCode = 0;
+            stub.sessionExpired = false;
+            return stub;
         }
     }
     

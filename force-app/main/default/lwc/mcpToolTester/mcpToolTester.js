@@ -3,7 +3,14 @@ import getAvailableServers from '@salesforce/apex/McpToolTester.getAvailableServ
 import initializeConnection from '@salesforce/apex/McpToolTester.initializeConnection';
 import getAvailableTools from '@salesforce/apex/McpToolTester.getAvailableTools';
 import callTool from '@salesforce/apex/McpToolTester.callTool';
+import sendInitializedNotification from '@salesforce/apex/McpToolTester.sendInitializedNotification';
+import terminateSession from '@salesforce/apex/McpToolTester.terminateSession';
 import runPermissionsDiagnostic from '@salesforce/apex/McpToolTester.runPermissionsDiagnostic';
+
+// Fallback if the server's InitializeResponse omits protocolVersion.
+// We sent this in the initialize request, so it is the most defensible
+// assumption for the MCP-Protocol-Version header on subsequent calls.
+const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 
 export default class McpToolTester extends LightningElement {
     @track selectedServer = '';
@@ -26,6 +33,16 @@ export default class McpToolTester extends LightningElement {
     @track permissionsDiagnosticLoading = false;
     @track additionalUsername = '';
     @track showPermissionsDiagnostic = false;
+    // MCP session state (MCP 2025-06-18 Streamable HTTP spec).
+    // sessionId is whatever the server returned on Mcp-Session-Id at
+    // initialize time (may be null if the server doesn't use
+    // sessions). negotiatedProtocolVersion is taken from the
+    // InitializeResponse and sent on every subsequent request as
+    // `MCP-Protocol-Version`. isReinitializing guards the auto-reinit
+    // loop triggered by a 404-with-session error.
+    @track sessionId = null;
+    @track negotiatedProtocolVersion = null;
+    isReinitializing = false;
 
     /**
      * Wire to get available Named Credentials. On error we surface a
@@ -59,6 +76,7 @@ export default class McpToolTester extends LightningElement {
      * Handle server selection
      */
     handleServerChange(event) {
+        this.terminateMcpSession();
         this.selectedServer = event.detail.value;
         this.resetState();
     }
@@ -67,6 +85,7 @@ export default class McpToolTester extends LightningElement {
      * Handle manual server input
      */
     handleManualServerInput(event) {
+        this.terminateMcpSession();
         this.selectedServer = event.target.value;
         this.resetState();
     }
@@ -86,10 +105,49 @@ export default class McpToolTester extends LightningElement {
         this.permissionsDiagnostic = null;
         this.permissionsDiagnosticError = '';
         this.permissionsDiagnosticLoading = false;
+        this.sessionId = null;
+        this.negotiatedProtocolVersion = null;
     }
 
     /**
-     * Initialize the MCP connection
+     * Best-effort MCP session termination (HTTP DELETE with
+     * `Mcp-Session-Id`). Per the 2025-06-18 spec, clients SHOULD do
+     * this when they no longer need the session. We fire and forget;
+     * the Apex side swallows 405 (server doesn't allow DELETE) so
+     * the UI never hangs on cleanup. Always clears local session
+     * state regardless of network outcome.
+     */
+    terminateMcpSession() {
+        const server = this.selectedServer;
+        const sid = this.sessionId;
+        this.sessionId = null;
+        this.negotiatedProtocolVersion = null;
+        if (!server || !sid) {
+            return;
+        }
+        terminateSession({ namedCredential: server, sessionId: sid })
+            .catch(err => {
+                console.warn('MCP session terminate failed (non-fatal):', err);
+            });
+    }
+
+    /**
+     * Browser is tearing down the component (tab close, navigation
+     * away). Mirror the spec's "client no longer needs this session"
+     * intent with a best-effort DELETE.
+     */
+    disconnectedCallback() {
+        this.terminateMcpSession();
+    }
+
+    /**
+     * Initialize the MCP connection per the 2025-06-18 spec:
+     *   1. POST `initialize` (no session / no protocol headers yet).
+     *   2. Capture `Mcp-Session-Id` from the response, if any.
+     *   3. Record the negotiated `protocolVersion` for subsequent
+     *      `MCP-Protocol-Version` headers.
+     *   4. Fire-and-forget `notifications/initialized`.
+     *   5. Continue with tools/list and the permissions diagnostic.
      */
     async handleConnect() {
         if (!this.selectedServer) {
@@ -97,19 +155,35 @@ export default class McpToolTester extends LightningElement {
             return;
         }
 
+        // Reset session state defensively in case this is a manual
+        // reconnect (user clicked Connect again on the same server).
+        this.sessionId = null;
+        this.negotiatedProtocolVersion = null;
         this.isLoading = true;
         this.error = '';
         this.errorDetails = null;
 
         try {
-            const result = await initializeConnection({ 
-                namedCredential: this.selectedServer 
+            const mcpResponse = await initializeConnection({
+                namedCredential: this.selectedServer
             });
-            const response = this.parseResponse(result);
-            
+
+            if (mcpResponse && mcpResponse.sessionId) {
+                this.sessionId = mcpResponse.sessionId;
+            }
+
+            const response = this.parseResponse(mcpResponse && mcpResponse.body);
+
             if (response.result) {
                 this.serverInfo = response.result;
+                this.negotiatedProtocolVersion =
+                    (response.result && response.result.protocolVersion)
+                    || DEFAULT_PROTOCOL_VERSION;
                 this.isInitialized = true;
+                // Fire-and-forget per spec: the server returns 202
+                // Accepted with no body, and a failure here should
+                // not block the user from testing tools.
+                this.sendInitializedAcknowledgement();
                 await this.loadTools();
                 this.loadPermissionsDiagnostic();
             } else if (response.error) {
@@ -120,6 +194,24 @@ export default class McpToolTester extends LightningElement {
         } finally {
             this.isLoading = false;
         }
+    }
+
+    /**
+     * Send the spec-required `notifications/initialized` JSON-RPC
+     * notification. Fire-and-forget: any failure is logged but does
+     * not surface in the UI. The Apex side already routes through
+     * executeMcp so the session and protocol-version headers go
+     * along for the ride.
+     */
+    sendInitializedAcknowledgement() {
+        if (!this.selectedServer) return;
+        sendInitializedNotification({
+            namedCredential: this.selectedServer,
+            sessionId: this.sessionId,
+            protocolVersion: this.negotiatedProtocolVersion
+        }).catch(err => {
+            console.warn('MCP notifications/initialized failed (non-fatal):', err);
+        });
     }
 
     /**
@@ -212,7 +304,8 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Load available tools from the MCP server
+     * Load available tools from the MCP server, carrying the
+     * session and negotiated protocol-version headers per the spec.
      */
     async loadTools() {
         this.isLoading = true;
@@ -220,11 +313,14 @@ export default class McpToolTester extends LightningElement {
         this.errorDetails = null;
 
         try {
-            const result = await getAvailableTools({ 
-                namedCredential: this.selectedServer 
+            const mcpResponse = await getAvailableTools({
+                namedCredential: this.selectedServer,
+                sessionId: this.sessionId,
+                protocolVersion: this.negotiatedProtocolVersion
             });
-            const response = this.parseResponse(result);
-            
+            this.captureRotatedSessionId(mcpResponse);
+            const response = this.parseResponse(mcpResponse && mcpResponse.body);
+
             if (response.result && response.result.tools) {
                 this.tools = response.result.tools.map(tool => ({
                     name: tool.name,
@@ -238,9 +334,78 @@ export default class McpToolTester extends LightningElement {
                 this.handleMcpError('Failed to load tools', response.error);
             }
         } catch (err) {
-            this.handleApexError(err, 'Error Loading Tools');
+            const recovered = await this.maybeReinitializeOnSessionExpired(err, () => this.loadTools());
+            if (!recovered) {
+                this.handleApexError(err, 'Error Loading Tools');
+            }
         } finally {
             this.isLoading = false;
+        }
+    }
+
+    /**
+     * Some servers may rotate the session ID across requests (rare
+     * but allowed by the spec since clients echo back whatever
+     * `Mcp-Session-Id` the server most recently issued). If the
+     * server returned a new session id on this response, adopt it.
+     */
+    captureRotatedSessionId(mcpResponse) {
+        if (mcpResponse && mcpResponse.sessionId && mcpResponse.sessionId !== this.sessionId) {
+            this.sessionId = mcpResponse.sessionId;
+        }
+    }
+
+    /**
+     * MCP 2025-06-18 spec: "When a client receives HTTP 404 in
+     * response to a request containing an Mcp-Session-Id, it MUST
+     * start a new session by sending a new InitializeRequest
+     * without a session ID attached."
+     *
+     * We detect that via the `sessionExpired` flag the Apex side
+     * sets on the structured `_error` payload, re-initialize once,
+     * and (if init succeeds) retry the original action. Returns
+     * true when the recovery path ran -- callers should skip their
+     * normal error rendering in that case.
+     */
+    async maybeReinitializeOnSessionExpired(err, retryFn) {
+        if (this.isReinitializing) {
+            // Already in the middle of one recovery; don't loop.
+            return false;
+        }
+        const parsed = this.parseApexErrorBody(err);
+        if (!parsed || !parsed.sessionExpired) {
+            return false;
+        }
+        this.isReinitializing = true;
+        try {
+            console.info('MCP session expired (HTTP 404 with Mcp-Session-Id). Re-initializing per spec.');
+            this.sessionId = null;
+            this.negotiatedProtocolVersion = null;
+            const initResponse = await initializeConnection({
+                namedCredential: this.selectedServer
+            });
+            if (initResponse && initResponse.sessionId) {
+                this.sessionId = initResponse.sessionId;
+            }
+            const parsedInit = this.parseResponse(initResponse && initResponse.body);
+            if (parsedInit.error) {
+                this.handleMcpError('Re-initialization failed after session expiry', parsedInit.error);
+                return true;
+            }
+            this.serverInfo = parsedInit.result;
+            this.negotiatedProtocolVersion =
+                (parsedInit.result && parsedInit.result.protocolVersion)
+                || DEFAULT_PROTOCOL_VERSION;
+            this.sendInitializedAcknowledgement();
+            if (typeof retryFn === 'function') {
+                await retryFn();
+            }
+            return true;
+        } catch (reinitErr) {
+            this.handleApexError(reinitErr, 'Re-initialization failed after session expiry');
+            return true;
+        } finally {
+            this.isReinitializing = false;
         }
     }
 
@@ -316,7 +481,8 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Execute the selected tool
+     * Execute the selected tool, carrying the session and negotiated
+     * protocol-version headers per the 2025-06-18 spec.
      */
     async handleExecuteTool() {
         if (!this.selectedTool) return;
@@ -328,23 +494,27 @@ export default class McpToolTester extends LightningElement {
 
         try {
             const params = JSON.stringify(this.toolParameters);
-            const result = await callTool({ 
+            const mcpResponse = await callTool({
                 namedCredential: this.selectedServer,
                 toolName: this.selectedTool.name,
-                parameters: params
+                parameters: params,
+                sessionId: this.sessionId,
+                protocolVersion: this.negotiatedProtocolVersion
             });
-            
-            const response = this.parseResponse(result);
-            
+            this.captureRotatedSessionId(mcpResponse);
+            const response = this.parseResponse(mcpResponse && mcpResponse.body);
+
             if (response.result) {
-                // Format the response for better readability
                 const formattedResponse = this.formatMcpResponse(response.result);
                 this.toolResponse = formattedResponse;
             } else if (response.error) {
                 this.handleMcpError('Tool execution failed', response.error);
             }
         } catch (err) {
-            this.handleApexError(err, 'Tool Execution Error');
+            const recovered = await this.maybeReinitializeOnSessionExpired(err, () => this.handleExecuteTool());
+            if (!recovered) {
+                this.handleApexError(err, 'Tool Execution Error');
+            }
         } finally {
             this.isLoading = false;
         }
@@ -469,9 +639,13 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Navigate back to server selection
+     * Navigate back to server selection. Per the 2025-06-18 spec,
+     * clients that no longer need a session SHOULD terminate it via
+     * HTTP DELETE. We fire that off best-effort before resetting
+     * local state.
      */
     handleBackToServers() {
+        this.terminateMcpSession();
         this.resetState();
         this.currentView = 'server-select';
     }

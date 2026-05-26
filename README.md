@@ -34,6 +34,7 @@ A Salesforce Lightning application for testing and validating MCP (Model Context
   - [Technical Componentry](#technical-componentry)
     - [Lightning Web Component: `mcpToolTester`](#lightning-web-component-mcptooltester)
     - [Apex Class: `McpToolTester`](#apex-class-mcptooltester)
+    - [MCP Session Management (2025-06-18)](#mcp-session-management-2025-06-18)
     - [Lightning App: `MCP Workbench`](#lightning-app-mcp-workbench)
     - [Permission Set: `MCP_Workbench`](#permission-set-mcp_workbench)
   - [Error Handling](#error-handling)
@@ -196,14 +197,30 @@ Interactive UI with three views:
 
 ### Apex Class: `McpToolTester`
 
-Backend controller that handles MCP protocol communication:
+Backend controller that handles MCP protocol communication. All MCP HTTP entrypoints below return an `McpResponse` wrapper (`body`, `statusCode`, `sessionId`, `sessionExpired`) so the LWC can manage the MCP session lifecycle described in [MCP Session Management](#mcp-session-management-2025-06-18).
 
-- `initializeConnection(namedCredential)` - Connect to MCP server
-- `getAvailableTools(namedCredential)` - List available tools
-- `callTool(namedCredential, toolName, parameters)` - Execute a tool
-- `getAvailableServers()` - List Named Credentials
+- `initializeConnection(namedCredential)` - Connect to MCP server; captures the server's `Mcp-Session-Id`.
+- `sendInitializedNotification(namedCredential, sessionId, protocolVersion)` - Fire the spec-required `notifications/initialized` JSON-RPC notification after a successful initialize.
+- `getAvailableTools(namedCredential, sessionId, protocolVersion)` - List available tools.
+- `getAvailableResources(namedCredential, sessionId, protocolVersion)` - List available MCP resources.
+- `callTool(namedCredential, toolName, parameters, sessionId, protocolVersion)` - Execute a tool.
+- `terminateSession(namedCredential, sessionId)` - Best-effort HTTP DELETE that releases the session server-side. Tolerates 405 Method Not Allowed.
+- `runPermissionsDiagnostic(namedCredential, additionalUsername)` - Read-only permissions diagnostic (see [Permissions Diagnostic](#permissions-diagnostic)).
+- `callMcpServer(namedCredential, requestBody)` - Legacy String-returning entrypoint retained for backward compatibility; new code should use the methods above.
+- `getAvailableServers()` - List Named Credentials.
 
 **Location**: `force-app/main/default/classes/McpToolTester.cls`
+
+### MCP Session Management (2025-06-18)
+
+MCP Workbench implements the Streamable HTTP session management contract from the [MCP 2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management):
+
+1. **Session capture**: when the server returns an `Mcp-Session-Id` header on the `InitializeResponse`, the LWC stores it for the lifetime of the connection.
+2. **Header propagation**: every subsequent request (tool calls, list calls, the `notifications/initialized` notification, and the DELETE) carries that `Mcp-Session-Id` header, plus the negotiated `MCP-Protocol-Version` header.
+3. **Initialized notification**: immediately after a successful initialize, the workbench fires `notifications/initialized` (the spec-required handshake completion).
+4. **Server-initiated expiry**: if the server responds with HTTP 404 to a request carrying the workbench's session ID, the Apex side flags `sessionExpired: true` on the structured error payload and the LWC transparently re-initializes a new session before retrying the original action.
+5. **Explicit termination**: the LWC sends a best-effort HTTP DELETE with `Mcp-Session-Id` when the user navigates back to server selection, switches Named Credentials, or closes the workbench tab. Servers that respond 405 Method Not Allowed are tolerated gracefully.
+6. **Servers without sessions**: when the server omits `Mcp-Session-Id`, the workbench treats the connection as stateless — no session header is sent on subsequent calls, and DELETE is skipped.
 
 ### Lightning App: `MCP Workbench`
 
