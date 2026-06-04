@@ -4,6 +4,7 @@ import initializeConnection from '@salesforce/apex/McpToolTester.initializeConne
 import getAvailableTools from '@salesforce/apex/McpToolTester.getAvailableTools';
 import callTool from '@salesforce/apex/McpToolTester.callTool';
 import runPermissionsDiagnostic from '@salesforce/apex/McpToolTester.runPermissionsDiagnostic';
+import { isLikelyMarkdown, markdownToHtml } from './markdown';
 
 export default class McpToolTester extends LightningElement {
     @track selectedServer = '';
@@ -26,6 +27,25 @@ export default class McpToolTester extends LightningElement {
     @track permissionsDiagnosticLoading = false;
     @track additionalUsername = '';
     @track showPermissionsDiagnostic = false;
+    @track traceEntries = [];
+    @track showNetworkTrace = false;
+
+    // Tool-testing view state. `testTab` toggles between the Test surface
+    // (inputs + response) and the Schema reference. `responseTab` drives the
+    // sub-tabs inside the Response card. `responseMetadata` is a snapshot of
+    // the trace entry produced by the last Execute call -- it gives us status,
+    // duration, headers, and the raw body without having to look up the trace
+    // entries list each render. `formResetKey` is bumped on Reset so that
+    // `lightning-input` instances are torn down and rebuilt empty (we don't
+    // two-way bind value, so a fresh key is the cleanest way to clear them).
+    @track testTab = 'test';
+    @track responseTab = 'pretty';
+    @track descriptionExpanded = false;
+    @track responseMetadata = null;
+    @track inputsHasOverflow = false;
+    @track responseCopiedMsg = '';
+    @track schemaCopiedMsg = '';
+    formResetKey = 0;
 
     /**
      * Wire to get available Named Credentials. On error we surface a
@@ -72,7 +92,9 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Reset state when changing servers
+     * Reset state when changing servers. The network-trace is a
+     * per-session log, so swapping the Named Credential starts a
+     * fresh trace.
      */
     resetState() {
         this.serverInfo = null;
@@ -86,6 +108,7 @@ export default class McpToolTester extends LightningElement {
         this.permissionsDiagnostic = null;
         this.permissionsDiagnosticError = '';
         this.permissionsDiagnosticLoading = false;
+        this.traceEntries = [];
     }
 
     /**
@@ -226,13 +249,9 @@ export default class McpToolTester extends LightningElement {
             const response = this.parseResponse(result);
             
             if (response.result && response.result.tools) {
-                this.tools = response.result.tools.map(tool => ({
-                    name: tool.name,
-                    description: tool.description || 'No description available',
-                    inputSchema: tool.inputSchema,
-                    title: tool.title || tool.name,
-                    key: `tool-${tool.name}`
-                }));
+                this.tools = response.result.tools.map((tool) =>
+                    this.decorateToolForList(tool, /* expanded */ false)
+                );
                 this.currentView = 'tools';
             } else if (response.error) {
                 this.handleMcpError('Failed to load tools', response.error);
@@ -245,13 +264,86 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Handle tool selection
+     * Build the view model for a single tool tile. We pre-compute the
+     * markdown HTML, the "Show more" toggle hint, and the container class
+     * string here so the template stays declarative -- LWC for:each can't
+     * call methods per item or branch on derived state without exploding
+     * into nested templates.
+     *
+     * `expanded` is carried per-tool so a user can pop just the tile they
+     * care about without disturbing the rest of the grid.
+     */
+    decorateToolForList(tool, expanded) {
+        const description = tool.description || 'No description available';
+        const descriptionIsMarkdown = isLikelyMarkdown(description);
+        const toggleNeeded = this.shouldClampDescription(description);
+        return {
+            name: tool.name,
+            description,
+            descriptionIsMarkdown,
+            descriptionHtml: descriptionIsMarkdown ? markdownToHtml(description) : '',
+            descriptionExpanded: expanded,
+            descriptionToggleNeeded: toggleNeeded,
+            descriptionToggleLabel: expanded ? 'Show less' : 'Show more',
+            descriptionContainerClass: this.toolDocContainerClass(expanded, toggleNeeded),
+            inputSchema: tool.inputSchema,
+            title: tool.title || tool.name,
+            // Bumping the key when collapse-state flips would re-mount
+            // lightning-formatted-rich-text; keep the key tied to the
+            // tool name so the rich-text component just re-renders.
+            key: `tool-${tool.name}`
+        };
+    }
+
+    /**
+     * Shared rule for "this description is long enough to deserve a
+     * Show more toggle." Roughly the same heuristic the testing-view
+     * description uses -- short prose stays inline.
+     */
+    shouldClampDescription(text) {
+        if (typeof text !== 'string') return false;
+        if (text.length > 220) return true;
+        return text.split('\n').length > 3;
+    }
+
+    toolDocContainerClass(expanded, toggleNeeded) {
+        const base = 'tool-card__doc';
+        if (!toggleNeeded) return base;
+        return expanded ? `${base} ${base}_expanded` : `${base} ${base}_collapsed`;
+    }
+
+    /**
+     * Toggle the per-tile description clamp. Stops propagation so the
+     * click does not bubble up to the article's `handleToolSelect`
+     * handler and navigate the user into the testing view.
+     */
+    handleToggleToolDescription(event) {
+        event.stopPropagation();
+        const name = event.currentTarget.dataset.tool;
+        this.tools = this.tools.map((t) => {
+            if (t.name !== name) return t;
+            return this.decorateToolForList(t, !t.descriptionExpanded);
+        });
+    }
+
+    /**
+     * Handle tool selection. Resets the per-tool testing surface so the
+     * inputs, response card, and tab selection start clean -- previous
+     * response/headers are not relevant to a freshly-selected tool.
      */
     handleToolSelect(event) {
         const toolName = event.currentTarget.dataset.tool;
         this.selectedTool = this.tools.find(t => t.name === toolName);
         this.toolParameters = {};
         this.toolResponse = '';
+        this.responseMetadata = null;
+        this.responseTab = 'pretty';
+        this.testTab = 'test';
+        this.descriptionExpanded = false;
+        this.inputsHasOverflow = false;
+        this.responseCopiedMsg = '';
+        this.schemaCopiedMsg = '';
+        this.formResetKey++;
         this.currentView = 'testing';
     }
 
@@ -325,6 +417,8 @@ export default class McpToolTester extends LightningElement {
         this.error = '';
         this.errorDetails = null;
         this.toolResponse = '';
+        this.responseMetadata = null;
+        this.responseCopiedMsg = '';
 
         try {
             const params = JSON.stringify(this.toolParameters);
@@ -340,6 +434,8 @@ export default class McpToolTester extends LightningElement {
                 // Format the response for better readability
                 const formattedResponse = this.formatMcpResponse(response.result);
                 this.toolResponse = formattedResponse;
+                this.responseMetadata = this.snapshotLatestTraceAsResponseMeta();
+                this.responseTab = 'pretty';
             } else if (response.error) {
                 this.handleMcpError('Tool execution failed', response.error);
             }
@@ -348,6 +444,72 @@ export default class McpToolTester extends LightningElement {
         } finally {
             this.isLoading = false;
         }
+    }
+
+    /**
+     * Grab the most recent trace entry (the one just produced by the
+     * callTool roundtrip) and reshape it into the fields the Response card
+     * needs. We snapshot rather than re-derive from `traceEntries` on every
+     * render so a later trace entry (e.g. a permissions check) doesn't
+     * silently overwrite what the Response card is showing.
+     */
+    snapshotLatestTraceAsResponseMeta() {
+        const last = this.traceEntries[this.traceEntries.length - 1];
+        if (!last) {
+            return null;
+        }
+        const tone = this.statusToneFor(last.statusCode, last.isError);
+        const statusLabel = last.statusText
+            ? `${last.statusCode} ${last.statusText}`
+            : `${last.statusCode || '—'}`;
+        const headerEntries = this.formatHeaderEntries(last.responseHeaders);
+        return {
+            statusCode: last.statusCode,
+            statusLabel,
+            statusTone: tone,
+            statusPillClass: `response-status response-status_${tone}`,
+            durationMs: last.durationMs,
+            durationLabel: this.formatDuration(last.durationMs),
+            rawBody: last.responseBody || '',
+            headerEntries,
+            hasHeaders: headerEntries.length > 0,
+            startedAt: last.startedAt
+        };
+    }
+
+    formatHeaderEntries(headers) {
+        if (!headers || typeof headers !== 'object') return [];
+        return Object.keys(headers)
+            .sort((a, b) => a.localeCompare(b))
+            .map((name, idx) => ({
+                key: `hdr-${idx}-${name}`,
+                name,
+                value: String(headers[name])
+            }));
+    }
+
+    /**
+     * Map an HTTP status / error flag to a semantic tone used by the
+     * status pill. 2xx -> success, 3xx -> info, 4xx -> warning,
+     * 5xx / explicit isError -> error. Unknowns fall back to neutral.
+     */
+    statusToneFor(statusCode, isError) {
+        if (isError) return 'error';
+        const code = Number(statusCode);
+        if (!code) return 'neutral';
+        if (code >= 200 && code < 300) return 'success';
+        if (code >= 300 && code < 400) return 'info';
+        if (code >= 400 && code < 500) return 'warning';
+        if (code >= 500) return 'error';
+        return 'neutral';
+    }
+
+    formatDuration(ms) {
+        if (ms == null) return '';
+        const n = Number(ms);
+        if (!Number.isFinite(n)) return '';
+        if (n < 1000) return `${n} ms`;
+        return `${(n / 1000).toFixed(2)} s`;
     }
     
     /**
@@ -396,7 +558,11 @@ export default class McpToolTester extends LightningElement {
     }
 
     /**
-     * Handle Apex/HTTP errors with detailed information.
+     * Handle Apex/HTTP errors with detailed information. If the
+     * server-side error JSON carries a `trace` field (added by the
+     * network-trace work in McpToolTester.cls), append it to the
+     * trace panel so the failed step is visible alongside the
+     * successful ones.
      */
     handleApexError(err, title) {
         console.log('Error Object:', JSON.stringify(err, null, 2));
@@ -406,6 +572,9 @@ export default class McpToolTester extends LightningElement {
         const parsedError = this.parseApexErrorBody(err);
         if (parsedError) {
             console.log('Parsed Apex Error:', JSON.stringify(parsedError, null, 2));
+            if (parsedError.trace) {
+                this.pushTraceEntry(parsedError.trace);
+            }
             const summary = parsedError.message
                 || parsedError.status
                 || parsedError.explanation
@@ -478,27 +647,34 @@ export default class McpToolTester extends LightningElement {
 
     /**
      * Parse MCP response (handles both plain JSON and SSE format).
+     *
+     * Two-step:
+     *   1. If `responseStr` is the `McpCallResult` envelope returned
+     *      by Apex (`{trace, body}`), push the trace to the
+     *      network-trace panel and continue with the embedded body.
+     *   2. Parse the body as JSON-RPC (or SSE-wrapped JSON-RPC).
+     *
      * On parse failure, surface a JSON-RPC-shaped error whose `data`
      * field carries the raw body (truncated) and the parser exception
-     * so handleMcpError can render actionable detail. Previously this
-     * collapsed every failure to "Invalid response format" with no body.
+     * so handleMcpError can render actionable detail.
      */
     parseResponse(responseStr) {
         const RAW_PREVIEW_MAX = 4000;
+        const body = this.recordTraceAndUnwrap(responseStr);
         try {
-            if (responseStr && responseStr.includes('event:') && responseStr.includes('data:')) {
-                const lines = responseStr.split('\n');
+            if (body && body.includes('event:') && body.includes('data:')) {
+                const lines = body.split('\n');
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         return JSON.parse(line.substring(6).trim());
                     }
                 }
             }
-            return JSON.parse(responseStr);
+            return JSON.parse(body);
         } catch (e) {
             console.error('Error parsing response:', e);
-            const preview = (responseStr || '').slice(0, RAW_PREVIEW_MAX);
-            const truncated = (responseStr || '').length > RAW_PREVIEW_MAX;
+            const preview = (body || '').slice(0, RAW_PREVIEW_MAX);
+            const truncated = (body || '').length > RAW_PREVIEW_MAX;
             return {
                 error: {
                     code: 'PARSE_ERROR',
@@ -507,11 +683,61 @@ export default class McpToolTester extends LightningElement {
                         detail: e && e.message ? e.message : String(e),
                         rawResponse: preview,
                         rawResponseTruncated: truncated,
-                        rawResponseLength: (responseStr || '').length
+                        rawResponseLength: (body || '').length
                     }
                 }
             };
         }
+    }
+
+    /**
+     * Try to interpret a String returned from `@AuraEnabled` Apex as
+     * an `McpCallResult` envelope. When it is, append the trace to
+     * `traceEntries` and return the inner `body` string. When the
+     * input is not an envelope (e.g. an older method or a future
+     * unwrapped response), return it unchanged so callers degrade
+     * gracefully.
+     */
+    recordTraceAndUnwrap(responseStr) {
+        if (typeof responseStr !== 'string' || !responseStr.startsWith('{')) {
+            return responseStr;
+        }
+        try {
+            const parsed = JSON.parse(responseStr);
+            if (
+                parsed
+                && typeof parsed === 'object'
+                && parsed.trace
+                && Object.prototype.hasOwnProperty.call(parsed, 'body')
+            ) {
+                this.pushTraceEntry(parsed.trace);
+                return parsed.body;
+            }
+        } catch (parseErr) { // eslint-disable-line no-unused-vars
+            // Not an envelope; let the caller continue with the raw
+            // string so existing parse paths still apply.
+        }
+        return responseStr;
+    }
+
+    /**
+     * Append a trace entry returned from Apex to the
+     * network-trace panel. Each entry already carries an `id`
+     * generated server-side so the LWC can use it as a stable key.
+     */
+    pushTraceEntry(entry) {
+        if (!entry || !entry.id) {
+            return;
+        }
+        this.traceEntries = [...this.traceEntries, entry];
+    }
+
+    handleToggleNetworkTrace() {
+        this.showNetworkTrace = !this.showNetworkTrace;
+    }
+
+    handleClearNetworkTrace() {
+        this.traceEntries = [];
     }
 
     /**
@@ -594,7 +820,11 @@ export default class McpToolTester extends LightningElement {
                 itemType: itemType,
                 description: prop.description || '',
                 required: required.includes(key),
-                key: `field-${key}`,
+                // `formResetKey` is bumped by handleResetInputs so the
+                // template tears down old lightning-inputs and rebuilds them
+                // empty. We don't two-way bind `value`, so a fresh key is
+                // the cleanest way to clear native form state.
+                key: `field-${key}-${this.formResetKey}`,
                 items: arrayItems
             };
         });
@@ -691,5 +921,207 @@ export default class McpToolTester extends LightningElement {
     get selectedServerLabel() {
         const option = this.serverOptions.find(s => s.value === this.selectedServer);
         return option ? option.label : this.selectedServer;
+    }
+
+    // ---------- Tool-testing view: tabs, description, reset, copy ----------
+
+    handleSwitchToTestTab() {
+        this.testTab = 'test';
+    }
+
+    handleSwitchToSchemaTab() {
+        this.testTab = 'schema';
+    }
+
+    handleResponseTabPretty() {
+        this.responseTab = 'pretty';
+    }
+
+    handleResponseTabRaw() {
+        this.responseTab = 'raw';
+    }
+
+    handleResponseTabHeaders() {
+        this.responseTab = 'headers';
+    }
+
+    handleToggleDescription() {
+        this.descriptionExpanded = !this.descriptionExpanded;
+    }
+
+    /**
+     * Wipe the input form. We rebuild every lightning-input by bumping
+     * `formResetKey` (see `toolInputFields`) and clear the parameter map
+     * so the next Execute submits an empty payload. The previous response
+     * is intentionally left in place -- it stays available as a reference
+     * until the user runs another tool call.
+     */
+    handleResetInputs() {
+        this.toolParameters = {};
+        this.formResetKey++;
+    }
+
+    handleCopyResponse() {
+        const text = this.activeResponseText;
+        this.copyToClipboard(text).then((ok) => {
+            this.responseCopiedMsg = ok ? 'Copied' : 'Copy failed';
+            this.scheduleClear('responseCopiedMsg');
+        });
+    }
+
+    handleCopySchema() {
+        this.copyToClipboard(this.selectedToolSchema).then((ok) => {
+            this.schemaCopiedMsg = ok ? 'Copied' : 'Copy failed';
+            this.scheduleClear('schemaCopiedMsg');
+        });
+    }
+
+    /**
+     * Promise-returning wrapper around `navigator.clipboard.writeText` that
+     * never throws. LWC runs in a modern browser, but the Clipboard API can
+     * still fail (insecure context, focus loss, permission denial) -- in
+     * those cases we resolve `false` so callers surface a "Copy failed"
+     * hint instead of a thrown exception.
+     */
+    async copyToClipboard(text) {
+        try {
+            if (text == null) return false;
+            if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(String(text));
+                return true;
+            }
+            return false;
+        } catch (copyErr) { // eslint-disable-line no-unused-vars
+            return false;
+        }
+    }
+
+    scheduleClear(prop) {
+        // eslint-disable-next-line @lwc/lwc/no-async-operation
+        window.setTimeout(() => {
+            this[prop] = '';
+        }, 1500);
+    }
+
+    get activeResponseText() {
+        if (!this.responseMetadata) return this.toolResponse;
+        if (this.responseTab === 'raw') return this.responseMetadata.rawBody || '';
+        if (this.responseTab === 'headers') {
+            return this.responseMetadata.headerEntries
+                .map((h) => `${h.name}: ${h.value}`)
+                .join('\n');
+        }
+        return this.toolResponse;
+    }
+
+    // ---------- Tool-testing view: getters ----------
+
+    get isTestTab() {
+        return this.testTab === 'test';
+    }
+
+    get isSchemaTab() {
+        return this.testTab === 'schema';
+    }
+
+    get isResponsePrettyTab() {
+        return this.responseTab === 'pretty';
+    }
+
+    get isResponseRawTab() {
+        return this.responseTab === 'raw';
+    }
+
+    get isResponseHeadersTab() {
+        return this.responseTab === 'headers';
+    }
+
+    get testTabBtnClass() {
+        return `test-tab-strip__btn${this.isTestTab ? ' test-tab-strip__btn_active' : ''}`;
+    }
+
+    get schemaTabBtnClass() {
+        return `test-tab-strip__btn${this.isSchemaTab ? ' test-tab-strip__btn_active' : ''}`;
+    }
+
+    get prettyTabBtnClass() {
+        return `response-card__sub-tab${this.isResponsePrettyTab ? ' response-card__sub-tab_active' : ''}`;
+    }
+
+    get rawTabBtnClass() {
+        return `response-card__sub-tab${this.isResponseRawTab ? ' response-card__sub-tab_active' : ''}`;
+    }
+
+    get headersTabBtnClass() {
+        return `response-card__sub-tab${this.isResponseHeadersTab ? ' response-card__sub-tab_active' : ''}`;
+    }
+
+    get hasResponse() {
+        return this.responseMetadata !== null;
+    }
+
+    get testSurfaceClass() {
+        return this.hasResponse
+            ? 'test-surface test-surface_executed'
+            : 'test-surface test-surface_empty';
+    }
+
+    get inputsCardClass() {
+        return this.inputsHasOverflow
+            ? 'inputs-card inputs-card_overflow'
+            : 'inputs-card';
+    }
+
+    get descriptionContainerClass() {
+        const base = 'tool-doc';
+        return this.descriptionExpanded ? `${base} ${base}_expanded` : `${base} ${base}_collapsed`;
+    }
+
+    get descriptionToggleLabel() {
+        return this.descriptionExpanded ? 'Show less' : 'Show more';
+    }
+
+    get hasDescription() {
+        return (
+            this.selectedTool
+            && typeof this.selectedTool.description === 'string'
+            && this.selectedTool.description.trim().length > 0
+        );
+    }
+
+    /**
+     * Whether the testing-view description deserves a "Show more"
+     * affordance. Reuses the same heuristic as the tool tiles so a
+     * description that fits inline in the tile also fits inline in
+     * the testing view.
+     */
+    get descriptionToggleNeeded() {
+        if (!this.hasDescription) return false;
+        return this.shouldClampDescription(this.selectedTool.description || '');
+    }
+
+    get hasResponseHeaders() {
+        return !!(this.responseMetadata && this.responseMetadata.hasHeaders);
+    }
+
+    /**
+     * After each render, check whether the inputs scroll region overflows
+     * its container. We only update state when the boolean actually flips
+     * so the renderedCallback does not loop -- assigning the same value
+     * still triggers an LWC reactivity check, but no extra renders.
+     */
+    renderedCallback() {
+        if (!this.isTestingView) return;
+        const el = this.template.querySelector('[data-id="inputs-scroll"]');
+        if (!el) {
+            if (this.inputsHasOverflow) {
+                this.inputsHasOverflow = false;
+            }
+            return;
+        }
+        const overflows = el.scrollHeight > el.clientHeight + 1;
+        if (overflows !== this.inputsHasOverflow) {
+            this.inputsHasOverflow = overflows;
+        }
     }
 }

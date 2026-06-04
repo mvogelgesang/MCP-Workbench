@@ -1,0 +1,254 @@
+/* Pinned to the viewport bottom so it's always visible regardless
+ * of how the workbench page scrolls. position: fixed escapes the
+ * Lightning page's scroll container, which is what `sticky`
+ * couldn't reliably do across the various Lightning host surfaces
+ * (App Page, Home Page, Record Page). */
+.trace-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    background-color: #ffffff;
+    border-top: 1px solid #dddbda;
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+}
+
+.trace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background-color: #fafaf9;
+  border-bottom: 1px solid #dddbda;
+  cursor: pointer;
+  user-select: none;
+}
+
+.trace-header:hover {
+  background-color: #f3f3f3;
+}
+
+.trace-header__left {
+  display: flex;
+  align-items: center;
+}
+
+.trace-header__title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #181818;
+}
+
+.trace-body {
+    overflow: auto;
+}
+
+.trace-body_expanded {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.trace-body_collapsed {
+    display: none;
+}
+
+.trace-empty {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  color: #706e6b;
+  font-size: 0.875rem;
+}
+
+.trace-table {
+  width: 100%;
+  font-size: 0.8125rem;
+}
+
+.trace-col-narrow {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.trace-row__cell {
+  padding: 0 !important;
+  border-bottom: 1px solid #ecebea;
+}
+
+.trace-row__summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  font: inherit;
+  color: inherit;
+}
+
+.trace-row__summary:hover {
+  background-color: #f8f8f7;
+}
+
+.trace-row_success .trace-row__summary {
+  border-left-color: #2e844a;
+}
+
+.trace-row_error .trace-row__summary {
+  border-left-color: #c23934;
+  background-color: #fef1ee;
+}
+
+.trace-row_error .trace-row__summary:hover {
+  background-color: #fde2dc;
+}
+
+.trace-row_redirect .trace-row__summary {
+  border-left-color: #fe9339;
+}
+
+.trace-cell {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.5rem;
+}
+
+.trace-cell_narrow {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.trace-cell_status {
+  min-width: 7rem;
+}
+
+.trace-cell_name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.trace-cell__label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  color: #181818;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.trace-cell__endpoint {
+  font-size: 0.6875rem;
+  color: #706e6b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.trace-detail {
+    padding: 0.75rem 1rem 1rem 1.5rem;
+    background-color: #fafaf9;
+    border-top: 1px solid #ecebea;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.trace-detail__tabs {
+    background-color: #ffffff;
+    border: 1px solid #dddbda;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.trace-detail__tab-body {
+    padding: 0.5rem 0.25rem 0.25rem;
+}
+
+.trace-detail__error {
+    background-color: #fef1ee;
+    border: 1px solid #c23934;
+    border-radius: 4px;
+    padding: 0.75rem;
+}
+
+.trace-detail__heading {
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+  color: #181818;
+}
+
+.trace-detail__subheading {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #706e6b;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.trace-detail__row {
+  margin: 0.25rem 0;
+  font-size: 0.8125rem;
+  color: #181818;
+  word-break: break-word;
+}
+
+.trace-detail__note {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: #706e6b;
+}
+
+.trace-headers-table {
+  width: 100%;
+  font-size: 0.75rem;
+  border-collapse: collapse;
+}
+
+.trace-headers-table th,
+.trace-headers-table td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid #ecebea;
+  vertical-align: top;
+  text-align: left;
+  word-break: break-word;
+}
+
+.trace-headers-table th {
+  width: 30%;
+  font-weight: 600;
+  color: #181818;
+  background-color: #fafaf9;
+}
+
+.trace-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  background-color: #f3f3f3;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  color: #181818;
+}

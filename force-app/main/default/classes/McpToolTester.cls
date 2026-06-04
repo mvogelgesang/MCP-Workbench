@@ -1,56 +1,87 @@
 public with sharing class McpToolTester {
     
     /**
-     * Makes a callout to any MCP server via Named Credential
+     * Makes a callout to any MCP server via Named Credential.
+     *
+     * Returns an `McpCallResult` envelope (JSON serialized) on success
+     * so the LWC can attribute the call to a network-trace entry. On
+     * failure, the same trace metadata is embedded into the
+     * AuraHandledException JSON under the `trace` key, so the LWC
+     * can render the failed step in the trace panel without losing
+     * the existing error UI.
+     *
      * @param namedCredential - The Named Credential API name (e.g., 'PetStore', 'news', 'notion2')
      * @param requestBody - JSON-RPC request body as string
-     * @return String - Response from MCP server (or error details in JSON format)
+     * @return String - JSON envelope `{trace, body}` containing the server response
      */
     @AuraEnabled
     public static String callMcpServer(String namedCredential, String requestBody) {
-        HttpRequest req = new HttpRequest();
+        return callMcpServer(namedCredential, requestBody, inferLabelFromBody(requestBody));
+    }
+
+    /**
+     * Internal overload that lets the high-level wrappers
+     * (initialize / tools-list / tools-call) pass a human readable
+     * label so the network-trace panel can show `"initialize"`,
+     * `"tools/list"`, or `"tools/call:get_pet"` instead of an
+     * auto-inferred JSON-RPC method name.
+     */
+    public static String callMcpServer(String namedCredential, String requestBody, String label) {
+        TraceEntry trace = newTraceEntry(namedCredential, requestBody, label);
+        Long startMillis = System.currentTimeMillis();
         HttpResponse res;
-        
+
         try {
-            // Use the Named Credential callout with dynamic server name
-            req.setEndpoint('callout:' + namedCredential);
+            HttpRequest req = new HttpRequest();
+            req.setEndpoint(trace.endpoint);
             req.setMethod('POST');
-            
-            // Set the required headers for MCP protocol
             req.setHeader('Content-Type', 'application/json');
             req.setHeader('Accept', 'application/json, text/event-stream');
-            
-            // Set the JSON-RPC request body
             req.setBody(requestBody);
-            
-            // Set timeout (120 seconds max)
             req.setTimeout(120000);
-            
-            // Log request details for debugging
-            System.debug('MCP Request to: callout:' + namedCredential);
+
+            System.debug('MCP Request to: ' + trace.endpoint);
             System.debug('Request Body: ' + requestBody);
-            
+
             Http http = new Http();
             res = http.send(req);
-            
-            // Log response details
-            System.debug('Response Status Code: ' + res.getStatusCode());
-            System.debug('Response Status: ' + res.getStatus());
-            System.debug('Response Body: ' + res.getBody());
-            
-            if (res.getStatusCode() >= 200 && res.getStatusCode() < 300) {
-                return res.getBody();
-            }
+
+            trace.durationMs = System.currentTimeMillis() - startMillis;
+            trace.statusCode = res.getStatusCode();
+            trace.statusText = res.getStatus();
+            trace.responseHeaders = captureResponseHeaders(res);
 
             String rawBody = res.getBody();
+            // The trace panel intentionally carries the full body so
+            // diagnosing partial / oversized payloads is possible.
+            // The legacy `rawResponse` field on the error map is also
+            // un-truncated so the panel and the banner stay in sync.
+            trace.responseBody = rawBody;
+            trace.responseBodyTruncated = false;
+
+            System.debug('Response Status Code: ' + trace.statusCode);
+            System.debug('Response Status: ' + trace.statusText);
+            System.debug('Response Body: ' + rawBody);
+
+            if (trace.statusCode >= 200 && trace.statusCode < 300) {
+                trace.isError = false;
+                return JSON.serialize(new McpCallResult(trace, rawBody));
+            }
+
+            trace.isError = true;
+            trace.errorType = 'http';
+            trace.errorMessage = trace.statusText;
+            trace.errorExplanation = getErrorExplanation(trace.statusCode, namedCredential, rawBody);
+
             Map<String, Object> errorDetails = new Map<String, Object>{
                 '_error' => true,
-                'statusCode' => res.getStatusCode(),
-                'status' => res.getStatus(),
-                'endpoint' => 'callout:' + namedCredential,
+                'statusCode' => trace.statusCode,
+                'status' => trace.statusText,
+                'endpoint' => trace.endpoint,
                 'method' => 'POST',
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
-                'rawResponse' => truncateForAura(rawBody)
+                'rawResponse' => rawBody,
+                'trace' => trace
             };
 
             try {
@@ -65,10 +96,7 @@ public with sharing class McpToolTester {
                 errorDetails.put('rawResponseParseError', parseEx.getMessage());
             }
 
-            errorDetails.put(
-                'explanation',
-                getErrorExplanation(res.getStatusCode(), namedCredential, rawBody)
-            );
+            errorDetails.put('explanation', trace.errorExplanation);
 
             throw newAuraException(JSON.serialize(errorDetails));
 
@@ -77,13 +105,20 @@ public with sharing class McpToolTester {
             throw e;
 
         } catch (System.CalloutException e) {
+            trace.durationMs = System.currentTimeMillis() - startMillis;
+            trace.isError = true;
+            trace.errorType = 'callout';
+            trace.errorMessage = e.getMessage();
+            trace.errorExplanation = getCalloutErrorExplanation(e.getMessage(), namedCredential);
+
             Map<String, Object> errorDetails = new Map<String, Object>{
                 '_error' => true,
                 'type' => 'CalloutException',
                 'message' => e.getMessage(),
-                'endpoint' => 'callout:' + namedCredential,
+                'endpoint' => trace.endpoint,
                 'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
-                'explanation' => getCalloutErrorExplanation(e.getMessage(), namedCredential)
+                'explanation' => trace.errorExplanation,
+                'trace' => trace
             };
 
             System.debug(LoggingLevel.ERROR, 'Callout Exception: ' + e.getMessage());
@@ -92,13 +127,19 @@ public with sharing class McpToolTester {
             throw newAuraException(JSON.serialize(errorDetails));
 
         } catch (Exception e) {
+            trace.durationMs = System.currentTimeMillis() - startMillis;
+            trace.isError = true;
+            trace.errorType = 'unexpected';
+            trace.errorMessage = e.getMessage();
+
             Map<String, Object> errorDetails = new Map<String, Object>{
                 '_error' => true,
                 'type' => e.getTypeName(),
                 'message' => e.getMessage(),
                 'stackTrace' => e.getStackTraceString(),
-                'endpoint' => 'callout:' + namedCredential,
-                'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss')
+                'endpoint' => trace.endpoint,
+                'timestamp' => System.now().format('yyyy-MM-dd HH:mm:ss'),
+                'trace' => trace
             };
 
             System.debug(LoggingLevel.ERROR, 'Unexpected Exception: ' + e.getMessage());
@@ -106,6 +147,101 @@ public with sharing class McpToolTester {
 
             throw newAuraException(JSON.serialize(errorDetails));
         }
+    }
+
+    /**
+     * Build a partially-populated TraceEntry capturing everything we
+     * know at request-time. Response fields and duration are filled
+     * in by the caller after `http.send` returns (or fails).
+     */
+    @TestVisible
+    private static TraceEntry newTraceEntry(
+        String namedCredential,
+        String requestBody,
+        String label
+    ) {
+        TraceEntry trace = new TraceEntry();
+        trace.id = generateTraceId();
+        trace.label = label;
+        trace.method = 'POST';
+        trace.endpoint = 'callout:' + namedCredential;
+        trace.requestHeaders = new Map<String, String>{
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json, text/event-stream'
+        };
+        // No truncation: the trace panel renders the full body so the
+        // pretty-printer can parse it as JSON (truncated JSON is not
+        // valid JSON and falls back to raw display).
+        trace.requestBody = requestBody;
+        trace.requestBodyTruncated = false;
+        trace.startedAt = System.now().formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'');
+        trace.responseHeaders = new Map<String, String>();
+        trace.isError = false;
+        return trace;
+    }
+
+    /**
+     * Best-effort snapshot of response headers for the trace panel.
+     * Some mock contexts return null or throw; we swallow those so a
+     * missing header map never converts a healthy response into an
+     * error.
+     */
+    @TestVisible
+    private static Map<String, String> captureResponseHeaders(HttpResponse res) {
+        Map<String, String> headers = new Map<String, String>();
+        if (res == null) {
+            return headers;
+        }
+        try {
+            String[] keys = res.getHeaderKeys();
+            if (keys != null) {
+                for (String key : keys) {
+                    if (key != null) {
+                        headers.put(key, res.getHeader(key));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Mocks/runtime occasionally refuse header enumeration --
+            // not worth surfacing. The trace remains useful without
+            // them.
+        }
+        return headers;
+    }
+
+    /**
+     * Derive a human readable label from a JSON-RPC request body
+     * when the caller didn't pass one explicitly (i.e., a raw
+     * `callMcpServer` invocation that bypassed the wrappers).
+     */
+    @TestVisible
+    private static String inferLabelFromBody(String requestBody) {
+        if (String.isBlank(requestBody)) {
+            return 'raw-call';
+        }
+        try {
+            Object parsed = JSON.deserializeUntyped(requestBody);
+            if (parsed instanceof Map<String, Object>) {
+                Map<String, Object> body = (Map<String, Object>)parsed;
+                if (body.containsKey('method') && body.get('method') != null) {
+                    return String.valueOf(body.get('method'));
+                }
+            }
+        } catch (Exception e) {
+            // Non-JSON or unparseable; fall through to default label.
+        }
+        return 'raw-call';
+    }
+
+    /**
+     * Generate an opaque id used as the React-style key for trace
+     * rows in the LWC. Not cryptographic; just unique within a
+     * single session.
+     */
+    private static String generateTraceId() {
+        Long now = DateTime.now().getTime();
+        Integer rand = (Integer)(Math.random() * 1000000);
+        return 'trace-' + now + '-' + rand;
     }
 
     /**
@@ -259,6 +395,49 @@ public with sharing class McpToolTester {
      * Custom exception for MCP errors
      */
     public class McpException extends Exception {}
+
+    /**
+     * Per-callout metadata captured for the network-trace panel.
+     * Every field is serializable and `@AuraEnabled` so the LWC can
+     * render the row as-is. Request and response bodies are
+     * truncated to {@link #MAX_RAW_RESPONSE_CHARS}; the corresponding
+     * `*Truncated` boolean lets the UI render a clear marker.
+     */
+    public class TraceEntry {
+        @AuraEnabled public String id;
+        @AuraEnabled public String label;
+        @AuraEnabled public String method;
+        @AuraEnabled public String endpoint;
+        @AuraEnabled public Map<String, String> requestHeaders;
+        @AuraEnabled public String requestBody;
+        @AuraEnabled public Boolean requestBodyTruncated;
+        @AuraEnabled public Integer statusCode;
+        @AuraEnabled public String statusText;
+        @AuraEnabled public Map<String, String> responseHeaders;
+        @AuraEnabled public String responseBody;
+        @AuraEnabled public Boolean responseBodyTruncated;
+        @AuraEnabled public String startedAt;
+        @AuraEnabled public Long durationMs;
+        @AuraEnabled public Boolean isError;
+        @AuraEnabled public String errorType;
+        @AuraEnabled public String errorMessage;
+        @AuraEnabled public String errorExplanation;
+    }
+
+    /**
+     * Envelope returned from `callMcpServer` on success. The LWC
+     * unwraps `body` for normal JSON-RPC parsing and feeds `trace`
+     * into the network-trace panel.
+     */
+    public class McpCallResult {
+        @AuraEnabled public TraceEntry trace;
+        @AuraEnabled public String body;
+
+        public McpCallResult(TraceEntry trace, String body) {
+            this.trace = trace;
+            this.body = body;
+        }
+    }
     
     private static AuraHandledException newAuraException(String message) {
         AuraHandledException ex = new AuraHandledException(message);
@@ -311,7 +490,7 @@ public with sharing class McpToolTester {
             };
             
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
+            return callMcpServer(namedCredential, requestBody, 'tools/call:' + toolName);
             
         } catch (AuraHandledException e) {
             throw e;
@@ -335,7 +514,7 @@ public with sharing class McpToolTester {
             };
             
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
+            return callMcpServer(namedCredential, requestBody, 'tools/list');
             
         } catch (AuraHandledException e) {
             throw e;
@@ -359,7 +538,7 @@ public with sharing class McpToolTester {
             };
             
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
+            return callMcpServer(namedCredential, requestBody, 'resources/list');
             
         } catch (AuraHandledException e) {
             throw e;
@@ -391,7 +570,7 @@ public with sharing class McpToolTester {
             };
             
             String requestBody = JSON.serialize(request);
-            return callMcpServer(namedCredential, requestBody);
+            return callMcpServer(namedCredential, requestBody, 'initialize');
             
         } catch (AuraHandledException e) {
             throw e;

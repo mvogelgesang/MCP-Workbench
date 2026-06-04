@@ -164,3 +164,559 @@
 .permissions-panel th {
     background-color: #fafaf9;
 }
+
+/* The network-trace child uses `position: fixed` inside its
+ * shadow DOM to dock to the bottom of the viewport. The child
+ * itself is removed from normal flow, so we reserve a fixed
+ * amount of bottom padding on the lightning-card body to keep
+ * the workbench's content from sliding under the collapsed
+ * panel header. Sized for the collapsed bar (~3rem of header +
+ * a little breathing room). */
+c-mcp-network-trace {
+    display: block;
+}
+
+.slds-card__body,
+.slds-card {
+    padding-bottom: 4rem;
+}
+
+/* Markdown-rendered tool descriptions. Tightens the default
+ * lightning-formatted-rich-text spacing so headings/lists don't
+ * inflate the tool cards. */
+.tool-description {
+    margin: 0;
+}
+
+.tool-description_markdown :first-child {
+    margin-top: 0;
+}
+
+.tool-description_markdown :last-child {
+    margin-bottom: 0;
+}
+
+.tool-description_markdown h1,
+.tool-description_markdown h2,
+.tool-description_markdown h3,
+.tool-description_markdown h4,
+.tool-description_markdown h5,
+.tool-description_markdown h6 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0.5rem 0 0.25rem;
+}
+
+.tool-description_markdown p {
+    margin: 0.25rem 0;
+}
+
+.tool-description_markdown ul,
+.tool-description_markdown ol {
+    margin: 0.25rem 0 0.25rem 1.25rem;
+    padding: 0;
+}
+
+.tool-description_markdown li {
+    margin: 0.125rem 0;
+}
+
+.tool-description_markdown code {
+    background-color: #f3f3f3;
+    padding: 0 0.25rem;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8125rem;
+}
+
+.tool-description_markdown pre {
+    background-color: #f3f3f3;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    overflow: auto;
+    margin: 0.5rem 0;
+}
+
+.tool-description_markdown pre code {
+    background: transparent;
+    padding: 0;
+}
+
+/* Tool tile description clamp. Mirrors the testing-view "Show more"
+ * behavior but with a flat, tile-appropriate aesthetic -- no border,
+ * no shaded background, just a soft fade-mask when collapsed and an
+ * inline link-style toggle. Toggle clicks stop propagation in JS so
+ * the article's selection handler doesn't fire alongside them. */
+
+.tool-card__doc {
+    position: relative;
+    margin: 0;
+}
+
+.tool-card__doc_collapsed .tool-card__doc-body {
+    max-height: 4.5rem;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+            mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+}
+
+.tool-card__doc-toggle {
+    background: transparent;
+    border: none;
+    color: #0176d3;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0;
+    margin-top: 0.25rem;
+}
+
+.tool-card__doc-toggle:hover {
+    text-decoration: underline;
+}
+
+/* ============================================================
+ * Tool testing view (Variant A — wide screen)
+ * ============================================================
+ *
+ * Layout philosophy:
+ *   - Title row owns the identity (tool name, id, server, status).
+ *   - Description is a thin, dismissible reference panel.
+ *   - Inputs and Response share a responsive grid: full-width form
+ *     pre-execute, 360–420 px inputs column + 1fr response post-execute.
+ *   - Inputs card is a flex column with its own scrollable body and
+ *     a sticky bottom action bar; scroll shadows + an explicit overflow
+ *     hint cue the user when the form is longer than the visible area.
+ */
+
+.test-page {
+    --inputs-min-width: 360px;
+    --inputs-max-width: 420px;
+    --card-stroke: #dddbda;
+    --card-radius: 6px;
+    --card-bg: #ffffff;
+    --card-shade: #fafaf9;
+}
+
+.test-page__title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    padding: 0.5rem 0;
+    margin-bottom: 0.75rem;
+    border-bottom: 1px solid var(--card-stroke);
+}
+
+.test-page__back {
+    margin-right: 0.25rem;
+}
+
+.test-page__title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.test-page__id,
+.test-page__server {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    border: 1px solid var(--card-stroke);
+    background: var(--card-shade);
+    color: #444240;
+}
+
+.test-page__id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.test-page__server {
+    background: #d8edff;
+    border-color: #aacbe2;
+    color: #014486;
+}
+
+/* Status pill in the title row -- the same look powers the badge in
+ * the response card header so the user can tie them together. */
+.response-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    border: 1px solid var(--card-stroke);
+    background: var(--card-shade);
+    color: #444240;
+}
+
+.response-status_success {
+    background: #d8eddb;
+    border-color: #abdcb4;
+    color: #194e22;
+}
+
+.response-status_info {
+    background: #d8edff;
+    border-color: #aacbe2;
+    color: #014486;
+}
+
+.response-status_warning {
+    background: #fff3d6;
+    border-color: #f4d489;
+    color: #5b3700;
+}
+
+.response-status_error {
+    background: #feded8;
+    border-color: #f5c0b8;
+    color: #8e0b0b;
+}
+
+.response-status_neutral {
+    background: var(--card-shade);
+}
+
+/* Description panel: collapsed by default to ~3 lines with a fade and
+ * a Show more / Show less toggle. Expanded removes the height cap. */
+
+.tool-doc {
+    position: relative;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--card-stroke);
+    background: var(--card-shade);
+    border-radius: var(--card-radius);
+}
+
+.tool-doc__body {
+    padding: 0.625rem 0.875rem;
+}
+
+.tool-doc_collapsed .tool-doc__body {
+    max-height: 4.6rem;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+            mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+}
+
+.tool-doc__toggle {
+    position: absolute;
+    right: 0.5rem;
+    bottom: 0.25rem;
+    background: transparent;
+    border: none;
+    color: #0176d3;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+}
+
+.tool-doc__toggle:hover {
+    text-decoration: underline;
+}
+
+/* Top tab strip switches between Test and Schema. The visual treatment
+ * intentionally borrows from SLDS tabs but lives outside lightning-tabset
+ * because we want full control of the active state and accessibility. */
+
+.test-tab-strip {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--card-stroke);
+    margin-bottom: 0.75rem;
+}
+
+.test-tab-strip__btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #514f4d;
+    cursor: pointer;
+}
+
+.test-tab-strip__btn:hover {
+    color: #0176d3;
+}
+
+.test-tab-strip__btn_active {
+    color: #0176d3;
+    border-bottom-color: #0176d3;
+}
+
+/* The test surface is the part of the Test tab that holds the inputs
+ * card and (optionally) the response card. Pre-execute it is single
+ * column so the form has room to breathe. Post-execute it splits into
+ * a fixed inputs column and a fluid response column on wide screens
+ * (≥ 1100 px) and stacks below that. */
+
+.test-surface {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    align-items: start;
+}
+
+@media (min-width: 1100px) {
+    .test-surface_executed {
+        grid-template-columns: minmax(var(--inputs-min-width), var(--inputs-max-width)) minmax(0, 1fr);
+    }
+}
+
+/* Inputs card: flex column with header / scrollable body / sticky
+ * action bar. The body uses CSS-only scroll shadows (background-attachment:
+ * local) so the user gets a visual cue at the top/bottom of the scroll
+ * region without any JS. A more explicit "scroll for more" hint is shown
+ * only when JS detects real overflow. */
+
+.inputs-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+    min-height: 320px;
+    border: 1px solid var(--card-stroke);
+    border-radius: var(--card-radius);
+    background: var(--card-bg);
+    overflow: hidden;
+}
+
+.inputs-card__header {
+    flex: 0 0 auto;
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--card-stroke);
+    background: var(--card-bg);
+}
+
+.inputs-card__scroll {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 1rem;
+    background:
+        linear-gradient(var(--card-bg) 30%, rgba(255, 255, 255, 0)),
+        linear-gradient(rgba(255, 255, 255, 0), var(--card-bg) 70%) 0 100%,
+        radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0)),
+        radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0)) 0 100%;
+    background-repeat: no-repeat;
+    background-color: var(--card-bg);
+    background-size: 100% 32px, 100% 32px, 100% 10px, 100% 10px;
+    background-attachment: local, local, scroll, scroll;
+}
+
+.inputs-card__scroll-hint {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 1rem;
+    border-top: 1px dashed #c9c7c5;
+    background: #fff8e6;
+    color: #5b3700;
+    font-size: 0.75rem;
+}
+
+.inputs-card__action-bar {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
+    border-top: 1px solid var(--card-stroke);
+    background: var(--card-shade);
+}
+
+/* Response card: header with status / duration / copy, sub-tab strip,
+ * body that scrolls. Matches the inputs card height envelope so the
+ * two cards line up visually when shown side-by-side. */
+
+.response-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+    min-height: 320px;
+    border: 1px solid var(--card-stroke);
+    border-radius: var(--card-radius);
+    background: var(--card-bg);
+    overflow: hidden;
+}
+
+.response-card__header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem 0.5rem 1rem;
+    border-bottom: 1px solid var(--card-stroke);
+    background: var(--card-bg);
+}
+
+.response-card__header h3 {
+    margin-right: 0.25rem;
+}
+
+.response-card__duration {
+    font-size: 0.75rem;
+    color: #706e6b;
+}
+
+.response-card__copy {
+    margin-left: auto;
+}
+
+.response-card__copied {
+    font-size: 0.75rem;
+    color: #194e22;
+    margin-left: 0.25rem;
+}
+
+.response-card__sub-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--card-stroke);
+    background: var(--card-shade);
+}
+
+.response-card__sub-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.8125rem;
+    color: #514f4d;
+    cursor: pointer;
+}
+
+.response-card__sub-tab:hover {
+    color: #0176d3;
+}
+
+.response-card__sub-tab_active {
+    color: #0176d3;
+    border-bottom-color: #0176d3;
+    background: var(--card-bg);
+}
+
+.response-card__body {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 0.75rem;
+    background: var(--card-bg);
+}
+
+.response-card__body .response-text {
+    background: var(--card-shade);
+    border: 1px solid var(--card-stroke);
+    border-radius: 4px;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.75rem;
+    max-height: none;
+    margin: 0;
+}
+
+.response-headers {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+}
+
+.response-headers th,
+.response-headers td {
+    text-align: left;
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid var(--card-stroke);
+    vertical-align: top;
+}
+
+.response-headers th {
+    font-weight: 600;
+    color: #444240;
+    background: var(--card-shade);
+    width: 30%;
+}
+
+.response-headers td {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    word-break: break-all;
+}
+
+/* Placeholder card shown in the response slot before the first
+ * Execute. Keeps the test surface visually balanced on wide screens
+ * (when the layout is single-column the placeholder lives below
+ * the inputs card instead). */
+
+.response-placeholder {
+    border: 1px dashed var(--card-stroke);
+    border-radius: var(--card-radius);
+    background: var(--card-shade);
+    padding: 2rem 1.5rem;
+    text-align: center;
+    min-height: 240px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.response-placeholder__icon {
+    opacity: 0.35;
+}
+
+.response-placeholder__title {
+    margin: 0;
+    font-weight: 600;
+    color: #514f4d;
+}
+
+.response-placeholder__subtitle {
+    margin: 0;
+    color: #706e6b;
+    font-size: 0.8125rem;
+    max-width: 30rem;
+}
+
+/* Schema card: its own surface, sits in the Schema tab tucked
+ * under the rest of the test page. Mirrors the response-card header
+ * so the Copy / status row reads as a consistent pattern. */
+
+.schema-card {
+    border: 1px solid var(--card-stroke);
+    border-radius: var(--card-radius);
+    background: var(--card-bg);
+}
+
+.schema-card__header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem 0.5rem 1rem;
+    border-bottom: 1px solid var(--card-stroke);
+    background: var(--card-shade);
+}
+
+.schema-card__header h3 {
+    margin: 0;
+    flex: 1 1 auto;
+}
+
+.schema-card__copied {
+    font-size: 0.75rem;
+    color: #194e22;
+}
+
+.schema-card__body {
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    max-height: 60vh;
+}
