@@ -753,9 +753,9 @@ private class McpToolTesterTest {
   // Group 4 -- Body shape edge cases
   // ===================================================================
 
-  // 200 OK with empty body is returned verbatim. Downstream the LWC's
-  // parseResponse will collapse this into "Invalid response format",
-  // but Apex itself does not surface anything.
+  // 200 OK with empty body is now wrapped in an envelope so the LWC
+  // can attribute the call to the network-trace panel. The embedded
+  // `body` field is the original verbatim response.
   @isTest
   static void testCallMcpServer_200EmptyBody_ReturnedVerbatim() {
     Test.setMock(HttpCalloutMock.class, new McpMockHttpResponse(200, ''));
@@ -767,11 +767,12 @@ private class McpToolTesterTest {
     );
     Test.stopTest();
 
-    System.assertEquals('', result, 'Empty 200 body should be returned verbatim');
+    System.assertEquals('', extractEnvelopeBody(result),
+      'Embedded body of an empty 200 envelope must round-trip as empty');
   }
 
-  // SSE parsing happens client-side via parseSseResponse; Apex returns
-  // the raw body. This pins that contract.
+  // SSE parsing happens client-side via parseSseResponse; Apex still
+  // returns the raw body inside the envelope.
   @isTest
   static void testCallMcpServer_200SseBody_ReturnedVerbatim() {
     String sse = 'event: message\ndata: {"jsonrpc":"2.0","result":{"tools":[]},"id":1}\n\n';
@@ -784,12 +785,13 @@ private class McpToolTesterTest {
     );
     Test.stopTest();
 
-    System.assertEquals(sse, result, 'SSE body should pass through Apex unchanged');
+    System.assertEquals(sse, extractEnvelopeBody(result),
+      'SSE body must round-trip unchanged via the envelope');
   }
 
   // 200 OK whose body contains a JSON-RPC level error is the MCP server
-  // signalling failure with HTTP success. Apex returns it verbatim and
-  // the LWC's handleMcpError path takes over.
+  // signalling failure with HTTP success. The envelope passes the body
+  // through; the LWC's handleMcpError path takes over.
   @isTest
   static void testCallMcpServer_200JsonRpcError_BodyReturnedForLwcHandling() {
     String body = '{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal error","data":{"detail":"db down"}},"id":1}';
@@ -802,7 +804,8 @@ private class McpToolTesterTest {
     );
     Test.stopTest();
 
-    System.assertEquals(body, result, '200 + JSON-RPC error body must pass through to LWC');
+    System.assertEquals(body, extractEnvelopeBody(result),
+      '200 + JSON-RPC error body must round-trip through the envelope to the LWC');
   }
 
   // Pins the success path of the inner JSON parse: when a 5xx body is
@@ -827,19 +830,15 @@ private class McpToolTesterTest {
   // ===================================================================
   // Group 5 -- Oversized payload
   //
-  // Pins that the Apex side does not truncate large rawResponse bodies.
-  // Client-side, very large AuraHandledException messages can manifest
-  // as "Script-thrown exception" depending on Lightning framework
-  // version; if a future refactor truncates rawResponse, this test
-  // will need an explicit update.
+  // After the NetworkTrace work the trace panel needs the full
+  // response body to pretty-print it as JSON (truncated JSON is not
+  // parseable). The Apex layer therefore embeds the full body in
+  // both `rawResponse` and `trace.responseBody`. Pinning that
+  // contract here protects the panel's pretty-printing behavior.
   // ===================================================================
 
-  // After the A.7 fix: rawResponse is truncated to MAX_RAW_RESPONSE_CHARS
-  // (~8 KB) with a marker so the AuraHandledException message stays
-  // small enough to survive Lightning sanitation. The first chunk is
-  // preserved verbatim; the marker carries the original length.
   @isTest
-  static void testCallMcpServer_LargeRawResponse_TruncatedWithMarker() {
+  static void testCallMcpServer_LargeRawResponse_EmbeddedInFull() {
     String chunk = '0123456789ABCDEF0123456789ABCDEF';
     String big = '';
     for (Integer i = 0; i < 1024; i++) {
@@ -855,13 +854,17 @@ private class McpToolTesterTest {
       System.assert(false, 'Expected AuraHandledException');
     } catch (AuraHandledException e) {
       String msg = e.getMessage();
-      Integer cap = McpToolTester.MAX_RAW_RESPONSE_CHARS;
-      System.assert(msg.contains(big.substring(0, cap)),
-        'Truncated rawResponse must preserve the first ' + cap + ' chars');
-      System.assert(!msg.contains(big),
-        'Full 32KB body must not be embedded after truncation fix');
-      System.assert(msg.contains('truncated; original length 32768'),
-        'Must include a marker with the original length: ' + msg);
+      System.assert(msg.contains(big),
+        'Full 32KB body must be embedded so the trace panel can pretty-print it');
+      System.assert(!msg.contains('truncated; original length'),
+        'No truncation marker should appear with the body fully embedded: ' + msg);
+
+      Map<String, Object> err = (Map<String, Object>) JSON.deserializeUntyped(msg);
+      Map<String, Object> trace = (Map<String, Object>) err.get('trace');
+      System.assertEquals(false, trace.get('responseBodyTruncated'),
+        'trace.responseBodyTruncated must report false now that no truncation happens');
+      System.assertEquals(big, trace.get('responseBody'),
+        'trace.responseBody must carry the full body verbatim');
     }
     Test.stopTest();
   }
@@ -1103,6 +1106,181 @@ private class McpToolTesterTest {
       System.assertNotEquals('Custom check', ucr.roleLabel,
         'No row should be tagged Custom check when additionalUsername is blank: ' + ucr);
     }
+  }
+
+  // ===================================================================
+  // Group 9 -- Network trace envelope
+  //
+  // After the NetworkTrace work: callMcpServer returns an
+  // `McpCallResult` envelope on success and embeds a `trace` field
+  // into the AuraHandledException JSON on failure. These tests pin
+  // the new contract so future refactors cannot silently drop the
+  // trace metadata the LWC panel depends on.
+  // ===================================================================
+
+  @isTest
+  static void testCallMcpServer_200_ReturnsEnvelopeWithTrace() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockHttpResponse(
+        200,
+        '{"jsonrpc":"2.0","result":{"protocolVersion":"2025-06-18"},"id":1}'
+      )
+    );
+
+    Test.startTest();
+    String result = McpToolTester.callMcpServer(
+      'TestServer',
+      '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+    );
+    Test.stopTest();
+
+    Map<String, Object> envelope = parseEnvelope(result);
+    System.assertNotEquals(null, envelope.get('trace'),
+      'Envelope must carry a trace field on success');
+    Map<String, Object> trace = (Map<String, Object>) envelope.get('trace');
+    System.assertEquals(200, Integer.valueOf(String.valueOf(trace.get('statusCode'))),
+      'Trace must record the HTTP status code');
+    System.assertEquals(false, trace.get('isError'),
+      '2xx response must not be marked as an error in the trace');
+    System.assertEquals('initialize', trace.get('label'),
+      'Inferred label should match the JSON-RPC method name');
+    System.assertEquals('POST', trace.get('method'),
+      'MCP calls are always POST');
+    System.assert(Long.valueOf(String.valueOf(trace.get('durationMs'))) >= 0,
+      'Duration must be a non-negative number of millis');
+    System.assertNotEquals(null, trace.get('id'),
+      'Trace must carry an id (LWC list key)');
+    System.assertNotEquals(null, trace.get('startedAt'),
+      'Trace must carry a startedAt timestamp');
+  }
+
+  @isTest
+  static void testCallMcpServer_LabelOverload_UsesProvidedLabel() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockHttpResponse(200, '{"jsonrpc":"2.0","result":{"ok":true},"id":1}')
+    );
+
+    Test.startTest();
+    String result = McpToolTester.callMcpServer(
+      'TestServer',
+      '{"jsonrpc":"2.0","id":1,"method":"tools/call"}',
+      'tools/call:get_pet'
+    );
+    Test.stopTest();
+
+    Map<String, Object> envelope = parseEnvelope(result);
+    Map<String, Object> trace = (Map<String, Object>) envelope.get('trace');
+    System.assertEquals('tools/call:get_pet', trace.get('label'),
+      'Caller-supplied label must override the auto-inferred method name');
+  }
+
+  @isTest
+  static void testCallTool_PassesToolNameAsLabel() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockHttpResponse(
+        200,
+        '{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"ok"}]},"id":1}'
+      )
+    );
+
+    Test.startTest();
+    String result = McpToolTester.callTool('TestServer', 'get_pet', '{"id":42}');
+    Test.stopTest();
+
+    Map<String, Object> envelope = parseEnvelope(result);
+    Map<String, Object> trace = (Map<String, Object>) envelope.get('trace');
+    System.assertEquals('tools/call:get_pet', trace.get('label'),
+      'callTool wrapper must label the trace with tools/call:<toolName>');
+  }
+
+  @isTest
+  static void testCallMcpServer_HttpError_ExceptionJsonCarriesTrace() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockHttpResponse(500, '{"error":{"code":"boom","message":"db down"}}')
+    );
+
+    Test.startTest();
+    try {
+      McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"tools/list"}');
+      System.assert(false, 'Expected AuraHandledException');
+    } catch (AuraHandledException e) {
+      Map<String, Object> err = (Map<String, Object>) JSON.deserializeUntyped(e.getMessage());
+      System.assertNotEquals(null, err.get('trace'),
+        'Error envelope must carry a trace for the network-trace panel');
+      Map<String, Object> trace = (Map<String, Object>) err.get('trace');
+      System.assertEquals(true, trace.get('isError'),
+        'HTTP errors must mark the trace as an error');
+      System.assertEquals('http', trace.get('errorType'),
+        'HTTP errors must set errorType=http');
+      System.assertEquals(500, Integer.valueOf(String.valueOf(trace.get('statusCode'))),
+        'Trace must record the failing status code');
+      System.assertNotEquals(null, trace.get('errorExplanation'),
+        'Trace must carry a human-readable errorExplanation');
+    }
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testCallMcpServer_CalloutException_ExceptionJsonCarriesTrace() {
+    Test.setMock(
+      HttpCalloutMock.class,
+      new McpMockCalloutFailure('IO Exception: Connection refused')
+    );
+
+    Test.startTest();
+    try {
+      McpToolTester.callMcpServer('TestServer', '{"jsonrpc":"2.0","id":1,"method":"initialize"}');
+      System.assert(false, 'Expected AuraHandledException');
+    } catch (AuraHandledException e) {
+      Map<String, Object> err = (Map<String, Object>) JSON.deserializeUntyped(e.getMessage());
+      System.assertNotEquals(null, err.get('trace'),
+        'CalloutException must still produce a trace for the panel');
+      Map<String, Object> trace = (Map<String, Object>) err.get('trace');
+      System.assertEquals(true, trace.get('isError'),
+        'CalloutException must mark the trace as an error');
+      System.assertEquals('callout', trace.get('errorType'),
+        'CalloutException must set errorType=callout');
+      System.assertEquals(null, trace.get('statusCode'),
+        'No HTTP response means statusCode stays null');
+      System.assertNotEquals(null, trace.get('errorExplanation'),
+        'CalloutException trace must still carry an explanation');
+    }
+    Test.stopTest();
+  }
+
+  @isTest
+  static void testInferLabelFromBody_FallsBackForBlankAndNonJson() {
+    System.assertEquals('raw-call', McpToolTester.inferLabelFromBody(null),
+      'null body falls back to raw-call');
+    System.assertEquals('raw-call', McpToolTester.inferLabelFromBody(''),
+      'empty body falls back to raw-call');
+    System.assertEquals('raw-call', McpToolTester.inferLabelFromBody('not-json'),
+      'non-JSON body falls back to raw-call');
+    System.assertEquals('raw-call', McpToolTester.inferLabelFromBody('{"id":1}'),
+      'JSON without a method field falls back to raw-call');
+    System.assertEquals('initialize', McpToolTester.inferLabelFromBody('{"method":"initialize"}'),
+      'JSON with a method field returns the method as the label');
+  }
+
+  // Parse the envelope JSON returned on success and pull out the
+  // embedded body, so the legacy "body returned verbatim" tests can
+  // continue to assert against the original payload.
+  private static String extractEnvelopeBody(String envelopeJson) {
+    Map<String, Object> envelope = parseEnvelope(envelopeJson);
+    Object body = envelope.get('body');
+    return body == null ? null : String.valueOf(body);
+  }
+
+  private static Map<String, Object> parseEnvelope(String envelopeJson) {
+    System.assertNotEquals(null, envelopeJson, 'Envelope JSON cannot be null');
+    Object parsed = JSON.deserializeUntyped(envelopeJson);
+    System.assert(parsed instanceof Map<String, Object>,
+      'Envelope must deserialize to a Map');
+    return (Map<String, Object>) parsed;
   }
 
   /**

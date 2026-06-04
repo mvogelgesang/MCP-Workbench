@@ -1,0 +1,267 @@
+<template>
+  <div class="trace-panel">
+    <div class="trace-header" onclick={handleHeaderToggle}>
+      <div class="trace-header__left">
+        <lightning-icon
+          icon-name={toggleIcon}
+          size="xx-small"
+          class="slds-m-right_x-small"
+        >
+        </lightning-icon>
+        <lightning-icon
+          icon-name={headerIcon}
+          variant={headerIconVariant}
+          size="x-small"
+          class="slds-m-right_x-small"
+        >
+        </lightning-icon>
+        <span class="trace-header__title">{headerLabel}</span>
+      </div>
+      <div class="trace-header__right">
+        <template if:true={hasEntries}>
+          <lightning-button-icon
+            icon-name="utility:clear"
+            variant="border-filled"
+            alternative-text="Clear network trace"
+            size="small"
+            onclick={handleClear}
+          >
+          </lightning-button-icon>
+        </template>
+      </div>
+    </div>
+
+    <template if:true={expanded}>
+      <div class={bodyClass}>
+        <template if:false={hasEntries}>
+          <div class="trace-empty">
+            <lightning-icon
+              icon-name="utility:info"
+              size="small"
+              class="slds-m-right_x-small"
+            >
+            </lightning-icon>
+            No network requests yet. Connect to a server or execute a tool to
+            populate the trace.
+          </div>
+        </template>
+
+        <template if:true={hasEntries}>
+          <table
+            class="trace-table slds-table slds-table_cell-buffer slds-table_bordered"
+          >
+            <thead>
+              <tr class="slds-line-height_reset">
+                <th scope="col" class="trace-col-narrow">
+                  <div class="slds-truncate">#</div>
+                </th>
+                <th scope="col" class="trace-col-narrow">
+                  <div class="slds-truncate">Status</div>
+                </th>
+                <th scope="col"><div class="slds-truncate">Name</div></th>
+                <th scope="col" class="trace-col-narrow">
+                  <div class="slds-truncate">Method</div>
+                </th>
+                <th scope="col" class="trace-col-narrow">
+                  <div class="slds-truncate">Duration</div>
+                </th>
+                <th scope="col" class="trace-col-narrow">
+                  <div class="slds-truncate">Started</div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <template for:each={decoratedEntries} for:item="entry">
+                <tr key={entry.key} class={entry.rowClass}>
+                  <td colspan="6" class="trace-row__cell">
+                    <button
+                      class="trace-row__summary"
+                      data-id={entry.id}
+                      onclick={handleRowToggle}
+                    >
+                      <span class="trace-cell trace-cell_narrow">
+                        <lightning-icon
+                          icon-name={entry.toggleIcon}
+                          size="xx-small"
+                          class="slds-m-right_x-small"
+                        >
+                        </lightning-icon>
+                        {entry.seq}
+                      </span>
+                      <span
+                        class="trace-cell trace-cell_narrow trace-cell_status"
+                      >
+                        <lightning-icon
+                          icon-name={entry.statusIcon}
+                          variant={entry.statusVariant}
+                          size="x-small"
+                          class="slds-m-right_x-small"
+                        >
+                        </lightning-icon>
+                        {entry.statusLabel}
+                      </span>
+                      <span class="trace-cell trace-cell_name">
+                        <span class="trace-cell__label">{entry.label}</span>
+                        <span class="trace-cell__endpoint"
+                          >{entry.endpoint}</span
+                        >
+                      </span>
+                      <span class="trace-cell trace-cell_narrow"
+                        >{entry.method}</span
+                      >
+                      <span class="trace-cell trace-cell_narrow"
+                        >{entry.durationLabel}</span
+                      >
+                      <span class="trace-cell trace-cell_narrow"
+                        >{entry.startedLabel}</span
+                      >
+                    </button>
+
+                    <template if:true={entry.isExpanded}>
+                      <div class="trace-detail">
+                        <template if:true={entry.showError}>
+                          <div class="trace-detail__error">
+                            <div class="trace-detail__heading">
+                              <lightning-icon
+                                icon-name="utility:error"
+                                variant="error"
+                                size="x-small"
+                                class="slds-m-right_x-small"
+                              >
+                              </lightning-icon>
+                              {entry.errorTypeLabel}
+                            </div>
+                            <template if:true={entry.errorMessage}>
+                              <p class="trace-detail__row">
+                                <strong>Message:</strong> {entry.errorMessage}
+                              </p>
+                            </template>
+                            <template if:true={entry.errorExplanation}>
+                              <p class="trace-detail__row">
+                                <strong>Explanation:</strong>
+                                {entry.errorExplanation}
+                              </p>
+                            </template>
+                          </div>
+                        </template>
+
+                        <lightning-tabset
+                          variant="scoped"
+                          class="trace-detail__tabs"
+                        >
+                          <lightning-tab label="Request" value="request">
+                            <div class="trace-detail__tab-body">
+                              <p class="trace-detail__row">
+                                <strong>Endpoint:</strong> {entry.endpoint}
+                              </p>
+                              <p class="trace-detail__row">
+                                <strong>Method:</strong> {entry.method}
+                              </p>
+
+                              <template if:true={entry.hasRequestHeaders}>
+                                <div class="trace-detail__subheading">
+                                  Headers
+                                </div>
+                                <table class="trace-headers-table">
+                                  <tbody>
+                                    <template
+                                      for:each={entry.requestHeadersList}
+                                      for:item="hdr"
+                                    >
+                                      <tr key={hdr.key}>
+                                        <th scope="row">{hdr.name}</th>
+                                        <td>{hdr.value}</td>
+                                      </tr>
+                                    </template>
+                                  </tbody>
+                                </table>
+                              </template>
+
+                              <template if:true={entry.hasRequest}>
+                                <div class="trace-detail__subheading">Body</div>
+                                <pre class="trace-code">
+{entry.prettyRequestBody}</pre
+                                >
+                                <template if:true={entry.requestBodyTruncated}>
+                                  <p class="trace-detail__note">
+                                    Request body was truncated for display.
+                                  </p>
+                                </template>
+                              </template>
+
+                              <template if:false={entry.hasRequest}>
+                                <p class="trace-detail__note">
+                                  No request body.
+                                </p>
+                              </template>
+                            </div>
+                          </lightning-tab>
+
+                          <lightning-tab label="Response" value="response">
+                            <div class="trace-detail__tab-body">
+                              <template if:true={entry.statusCode}>
+                                <p class="trace-detail__row">
+                                  <strong>Status:</strong> {entry.statusLabel}
+                                </p>
+                              </template>
+                              <p class="trace-detail__row">
+                                <strong>Duration:</strong>
+                                {entry.durationLabel}
+                              </p>
+                              <p class="trace-detail__row">
+                                <strong>Started:</strong> {entry.startedLabel}
+                              </p>
+
+                              <template if:true={entry.hasResponseHeaders}>
+                                <div class="trace-detail__subheading">
+                                  Headers
+                                </div>
+                                <table class="trace-headers-table">
+                                  <tbody>
+                                    <template
+                                      for:each={entry.responseHeadersList}
+                                      for:item="hdr"
+                                    >
+                                      <tr key={hdr.key}>
+                                        <th scope="row">{hdr.name}</th>
+                                        <td>{hdr.value}</td>
+                                      </tr>
+                                    </template>
+                                  </tbody>
+                                </table>
+                              </template>
+
+                              <template if:true={entry.hasResponse}>
+                                <div class="trace-detail__subheading">Body</div>
+                                <pre class="trace-code">
+{entry.prettyResponseBody}</pre
+                                >
+                                <template
+                                  if:true={entry.responseBodyTruncated}
+                                >
+                                  <p class="trace-detail__note">
+                                    Response body was truncated for display.
+                                  </p>
+                                </template>
+                              </template>
+
+                              <template if:false={entry.hasResponse}>
+                                <p class="trace-detail__note">
+                                  No response body.
+                                </p>
+                              </template>
+                            </div>
+                          </lightning-tab>
+                        </lightning-tabset>
+                      </div>
+                    </template>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </template>
+      </div>
+    </template>
+  </div>
+</template>

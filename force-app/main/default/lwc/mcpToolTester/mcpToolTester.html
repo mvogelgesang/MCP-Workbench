@@ -350,7 +350,27 @@
                                         </header>
                                     </div>
                                     <div class="slds-card__body slds-card__body_inner">
-                                        <p class="slds-text-body_small">{tool.description}</p>
+                                        <div class={tool.descriptionContainerClass}>
+                                            <div class="tool-card__doc-body">
+                                                <template if:true={tool.descriptionIsMarkdown}>
+                                                    <div class="tool-description tool-description_markdown slds-text-body_small">
+                                                        <lightning-formatted-rich-text value={tool.descriptionHtml}></lightning-formatted-rich-text>
+                                                    </div>
+                                                </template>
+                                                <template if:false={tool.descriptionIsMarkdown}>
+                                                    <p class="tool-description slds-text-body_small">{tool.description}</p>
+                                                </template>
+                                            </div>
+                                            <template if:true={tool.descriptionToggleNeeded}>
+                                                <button
+                                                    type="button"
+                                                    class="tool-card__doc-toggle"
+                                                    data-tool={tool.name}
+                                                    onclick={handleToggleToolDescription}>
+                                                    {tool.descriptionToggleLabel}
+                                                </button>
+                                            </template>
+                                        </div>
                                     </div>
                                     <footer class="slds-card__footer">
                                         <span class="slds-text-body_small slds-text-color_weak">Click to test</span>
@@ -371,163 +391,314 @@
 
         <!-- Tool Testing View -->
         <template if:true={isTestingView}>
-            <div class="slds-m-around_medium">
-                <div class="slds-page-header slds-m-bottom_medium">
-                    <div class="slds-page-header__row">
-                        <div class="slds-page-header__col-title">
-                            <lightning-button 
-                                icon-name="utility:back"
-                                variant="base"
-                                onclick={handleBackToTools}
-                                class="slds-m-right_small">
-                            </lightning-button>
-                            <div class="slds-media">
-                                <div class="slds-media__figure">
-                                    <lightning-icon icon-name="standard:code_set" size="medium"></lightning-icon>
-                                </div>
-                                <div class="slds-media__body">
-                                    <h1 class="slds-page-header__title">{selectedTool.title}</h1>
-                                    <p class="slds-text-body_small">{selectedTool.description}</p>
-                                    <p class="slds-text-body_small slds-text-color_weak">Server: {selectedServerLabel}</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+            <div class="slds-m-around_medium test-page">
+                <!-- Compact title row: title + id + server + status pill + back -->
+                <div class="test-page__title-row">
+                    <lightning-button-icon
+                        icon-name="utility:back"
+                        variant="bare"
+                        alternative-text="Back to tools"
+                        onclick={handleBackToTools}
+                        class="test-page__back">
+                    </lightning-button-icon>
+                    <h1 class="test-page__title">{selectedTool.title}</h1>
+                    <span class="test-page__id" title="Tool identifier">{selectedTool.name}</span>
+                    <span class="test-page__server" title="Named Credential">{selectedServerLabel}</span>
+                    <template if:true={hasResponse}>
+                        <span class={responseMetadata.statusPillClass}>
+                            {responseMetadata.statusLabel} · {responseMetadata.durationLabel}
+                        </span>
+                    </template>
                 </div>
 
-                <div class="slds-grid slds-gutters">
-                    <!-- Left Column: Input Parameters -->
-                    <div class="slds-col slds-size_1-of-1 slds-large-size_1-of-2">
-                        <div class="slds-box">
-                            <h3 class="slds-text-heading_small slds-m-bottom_medium">Input Parameters</h3>
-                            
-                            <template if:true={toolInputFields.length}>
-                                <template for:each={toolInputFields} for:item="field">
-                                    <div key={field.key} class="slds-m-bottom_medium">
-                                        <!-- Regular (non-array) input -->
-                                        <template if:false={field.isArray}>
-                                            <lightning-input
-                                                name={field.name}
-                                                label={field.label}
-                                                type={field.type}
-                                                data-param={field.name}
-                                                onchange={handleParameterChange}
-                                                required={field.required}>
-                                            </lightning-input>
-                                            <template if:true={field.description}>
-                                                <div class="slds-form-element__help">{field.description}</div>
-                                            </template>
-                                        </template>
+                <!-- Description (collapsible) -->
+                <template if:true={hasDescription}>
+                    <div class={descriptionContainerClass}>
+                        <div class="tool-doc__body">
+                            <template if:true={selectedTool.descriptionIsMarkdown}>
+                                <div class="tool-description tool-description_markdown slds-text-body_small">
+                                    <lightning-formatted-rich-text value={selectedTool.descriptionHtml}></lightning-formatted-rich-text>
+                                </div>
+                            </template>
+                            <template if:false={selectedTool.descriptionIsMarkdown}>
+                                <p class="tool-description slds-text-body_small">{selectedTool.description}</p>
+                            </template>
+                        </div>
+                        <template if:true={descriptionToggleNeeded}>
+                            <button class="tool-doc__toggle" onclick={handleToggleDescription} type="button">
+                                {descriptionToggleLabel}
+                            </button>
+                        </template>
+                    </div>
+                </template>
 
-                                        <!-- Array input -->
-                                        <template if:true={field.isArray}>
-                                            <div class="slds-form-element">
-                                                <label class="slds-form-element__label">
-                                                    {field.label}
-                                                    <template if:true={field.required}>
-                                                        <abbr class="slds-required" title="required">*</abbr>
-                                                    </template>
-                                                </label>
+                <!-- Top tab strip: Test | Schema -->
+                <div class="test-tab-strip" role="tablist">
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={isTestTab}
+                        class={testTabBtnClass}
+                        onclick={handleSwitchToTestTab}>
+                        Test
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={isSchemaTab}
+                        class={schemaTabBtnClass}
+                        onclick={handleSwitchToSchemaTab}>
+                        Schema
+                    </button>
+                </div>
+
+                <!-- Test tab -->
+                <template if:true={isTestTab}>
+                    <div class={testSurfaceClass}>
+                        <!-- Inputs card with sticky bottom action bar -->
+                        <section class={inputsCardClass} aria-label="Inputs">
+                            <header class="inputs-card__header">
+                                <h3 class="slds-text-heading_small">Inputs</h3>
+                            </header>
+
+                            <div class="inputs-card__scroll" data-id="inputs-scroll">
+                                <template if:true={toolInputFields.length}>
+                                    <template for:each={toolInputFields} for:item="field">
+                                        <div key={field.key} class="slds-m-bottom_medium">
+                                            <!-- Regular (non-array) input -->
+                                            <template if:false={field.isArray}>
+                                                <lightning-input
+                                                    name={field.name}
+                                                    label={field.label}
+                                                    type={field.type}
+                                                    data-param={field.name}
+                                                    onchange={handleParameterChange}
+                                                    required={field.required}>
+                                                </lightning-input>
                                                 <template if:true={field.description}>
-                                                    <div class="slds-form-element__help slds-m-bottom_x-small">{field.description}</div>
+                                                    <div class="slds-form-element__help">{field.description}</div>
                                                 </template>
-                                                
-                                                <!-- Array items -->
-                                                <div class="slds-box slds-box_x-small slds-theme_shade">
-                                                    <template if:true={field.items.length}>
-                                                        <template for:each={field.items} for:item="item">
-                                                            <div key={item.key} class="slds-grid slds-grid_vertical-align-center slds-gutters_x-small slds-m-bottom_x-small">
-                                                                <div class="slds-col slds-grow">
-                                                                    <lightning-input
-                                                                        value={item.value}
-                                                                        type={field.itemType}
-                                                                        data-param={field.name}
-                                                                        data-index={item.index}
-                                                                        onchange={handleArrayItemChange}
-                                                                        variant="label-hidden">
-                                                                    </lightning-input>
-                                                                </div>
-                                                                <div class="slds-col slds-no-flex">
-                                                                    <lightning-button-icon
-                                                                        icon-name="utility:delete"
-                                                                        variant="bare"
-                                                                        alternative-text="Remove item"
-                                                                        data-param={field.name}
-                                                                        data-index={item.index}
-                                                                        onclick={handleRemoveArrayItem}>
-                                                                    </lightning-button-icon>
-                                                                </div>
-                                                            </div>
+                                            </template>
+
+                                            <!-- Array input -->
+                                            <template if:true={field.isArray}>
+                                                <div class="slds-form-element">
+                                                    <label class="slds-form-element__label">
+                                                        {field.label}
+                                                        <template if:true={field.required}>
+                                                            <abbr class="slds-required" title="required">*</abbr>
                                                         </template>
+                                                    </label>
+                                                    <template if:true={field.description}>
+                                                        <div class="slds-form-element__help slds-m-bottom_x-small">{field.description}</div>
                                                     </template>
-                                                    
-                                                    <template if:false={field.items.length}>
-                                                        <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small">
-                                                            No items added yet
-                                                        </p>
-                                                    </template>
-                                                    
-                                                    <lightning-button
-                                                        label="Add Item"
-                                                        icon-name="utility:add"
-                                                        variant="neutral"
-                                                        data-param={field.name}
-                                                        onclick={handleAddArrayItem}
-                                                        class="slds-m-top_x-small">
-                                                    </lightning-button>
+
+                                                    <div class="slds-box slds-box_x-small slds-theme_shade">
+                                                        <template if:true={field.items.length}>
+                                                            <template for:each={field.items} for:item="item">
+                                                                <div key={item.key} class="slds-grid slds-grid_vertical-align-center slds-gutters_x-small slds-m-bottom_x-small">
+                                                                    <div class="slds-col slds-grow">
+                                                                        <lightning-input
+                                                                            value={item.value}
+                                                                            type={field.itemType}
+                                                                            data-param={field.name}
+                                                                            data-index={item.index}
+                                                                            onchange={handleArrayItemChange}
+                                                                            variant="label-hidden">
+                                                                        </lightning-input>
+                                                                    </div>
+                                                                    <div class="slds-col slds-no-flex">
+                                                                        <lightning-button-icon
+                                                                            icon-name="utility:delete"
+                                                                            variant="bare"
+                                                                            alternative-text="Remove item"
+                                                                            data-param={field.name}
+                                                                            data-index={item.index}
+                                                                            onclick={handleRemoveArrayItem}>
+                                                                        </lightning-button-icon>
+                                                                    </div>
+                                                                </div>
+                                                            </template>
+                                                        </template>
+
+                                                        <template if:false={field.items.length}>
+                                                            <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small">
+                                                                No items added yet
+                                                            </p>
+                                                        </template>
+
+                                                        <lightning-button
+                                                            label="Add Item"
+                                                            icon-name="utility:add"
+                                                            variant="neutral"
+                                                            data-param={field.name}
+                                                            onclick={handleAddArrayItem}
+                                                            class="slds-m-top_x-small">
+                                                        </lightning-button>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        </template>
-                                    </div>
+                                            </template>
+                                        </div>
+                                    </template>
                                 </template>
-                            </template>
-                            
-                            <template if:false={toolInputFields.length}>
-                                <p class="slds-text-body_small slds-text-color_weak">No input parameters required</p>
+
+                                <template if:false={toolInputFields.length}>
+                                    <p class="slds-text-body_small slds-text-color_weak">No input parameters required</p>
+                                </template>
+                            </div>
+
+                            <!-- Overflow hint: only shown when the inputs scroll
+                                 region overflows its container so the user
+                                 knows there are fields above the sticky action
+                                 bar that they need to scroll up to see. -->
+                            <template if:true={inputsHasOverflow}>
+                                <div class="inputs-card__scroll-hint" aria-hidden="true">
+                                    <lightning-icon icon-name="utility:up" size="xx-small"></lightning-icon>
+                                    <span>More fields above &mdash; scroll to review before executing</span>
+                                </div>
                             </template>
 
-                            <div class="slds-m-top_medium">
-                                <lightning-button 
-                                    label="Execute Tool" 
-                                    variant="brand"
-                                    onclick={handleExecuteTool}
+                            <footer class="inputs-card__action-bar">
+                                <lightning-button
+                                    label="Reset"
+                                    variant="neutral"
+                                    onclick={handleResetInputs}
                                     disabled={isLoading}
                                     class="slds-m-right_small">
                                 </lightning-button>
+                                <lightning-button
+                                    label="Execute Tool"
+                                    variant="brand"
+                                    onclick={handleExecuteTool}
+                                    disabled={isLoading}>
+                                </lightning-button>
+                            </footer>
+                        </section>
+
+                        <!-- Response card (post-execute) or placeholder (pre-execute) -->
+                        <template if:true={hasResponse}>
+                            <section class="response-card" aria-label="Response">
+                                <header class="response-card__header">
+                                    <h3 class="slds-text-heading_small">Response</h3>
+                                    <span class={responseMetadata.statusPillClass}>
+                                        {responseMetadata.statusLabel}
+                                    </span>
+                                    <span class="response-card__duration">{responseMetadata.durationLabel}</span>
+                                    <template if:true={responseCopiedMsg}>
+                                        <span class="response-card__copied">{responseCopiedMsg}</span>
+                                    </template>
+                                    <lightning-button-icon
+                                        icon-name="utility:copy"
+                                        variant="bare"
+                                        size="small"
+                                        alternative-text="Copy response"
+                                        title="Copy active tab"
+                                        onclick={handleCopyResponse}
+                                        class="response-card__copy">
+                                    </lightning-button-icon>
+                                </header>
+                                <div class="response-card__sub-tabs" role="tablist">
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={isResponsePrettyTab}
+                                        class={prettyTabBtnClass}
+                                        onclick={handleResponseTabPretty}>
+                                        Pretty
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={isResponseRawTab}
+                                        class={rawTabBtnClass}
+                                        onclick={handleResponseTabRaw}>
+                                        Raw
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={isResponseHeadersTab}
+                                        class={headersTabBtnClass}
+                                        onclick={handleResponseTabHeaders}>
+                                        Headers
+                                    </button>
+                                </div>
+                                <div class="response-card__body">
+                                    <template if:true={isResponsePrettyTab}>
+                                        <pre class="response-text">{toolResponse}</pre>
+                                    </template>
+                                    <template if:true={isResponseRawTab}>
+                                        <pre class="response-text">{responseMetadata.rawBody}</pre>
+                                    </template>
+                                    <template if:true={isResponseHeadersTab}>
+                                        <template if:true={hasResponseHeaders}>
+                                            <table class="response-headers">
+                                                <tbody>
+                                                    <template for:each={responseMetadata.headerEntries} for:item="hdr">
+                                                        <tr key={hdr.key}>
+                                                            <th scope="row">{hdr.name}</th>
+                                                            <td>{hdr.value}</td>
+                                                        </tr>
+                                                    </template>
+                                                </tbody>
+                                            </table>
+                                        </template>
+                                        <template if:false={hasResponseHeaders}>
+                                            <p class="slds-text-color_weak slds-text-body_small">
+                                                No response headers were captured for this call.
+                                            </p>
+                                        </template>
+                                    </template>
+                                </div>
+                            </section>
+                        </template>
+
+                        <template if:false={hasResponse}>
+                            <div class="response-placeholder" aria-hidden="true">
+                                <lightning-icon
+                                    icon-name="utility:forward"
+                                    size="medium"
+                                    class="response-placeholder__icon">
+                                </lightning-icon>
+                                <p class="response-placeholder__title">Response will appear here</p>
+                                <p class="response-placeholder__subtitle">
+                                    Fill in the inputs and click Execute Tool. Your response, headers, and raw payload all land in this panel.
+                                </p>
                             </div>
-                        </div>
-
-                        <!-- Input Schema -->
-                        <div class="slds-box slds-m-top_medium">
-                            <h3 class="slds-text-heading_small slds-m-bottom_small">Input Schema</h3>
-                            <pre class="schema-text">{selectedToolSchema}</pre>
-                        </div>
+                        </template>
                     </div>
+                </template>
 
-                    <!-- Right Column: Response -->
-                    <div class="slds-col slds-size_1-of-1 slds-large-size_1-of-2">
-                        <div class="slds-box response-container">
-                            <h3 class="slds-text-heading_small slds-m-bottom_medium">Response</h3>
-                            
-                            <template if:true={hasToolResponse}>
-                                <div class="slds-box slds-theme_shade">
-                                    <pre class="response-text">{toolResponse}</pre>
-                                </div>
+                <!-- Schema tab -->
+                <template if:true={isSchemaTab}>
+                    <section class="schema-card" aria-label="Schema">
+                        <header class="schema-card__header">
+                            <h3 class="slds-text-heading_small">Input Schema</h3>
+                            <template if:true={schemaCopiedMsg}>
+                                <span class="schema-card__copied">{schemaCopiedMsg}</span>
                             </template>
-
-                            <template if:false={hasToolResponse}>
-                                <div class="slds-text-align_center slds-p-vertical_large">
-                                    <lightning-icon icon-name="utility:forward" size="large" class="slds-m-bottom_small icon-placeholder"></lightning-icon>
-                                    <p class="slds-text-body_small slds-text-color_weak">
-                                        Execute the tool to see the response
-                                    </p>
-                                </div>
-                            </template>
-                        </div>
-                    </div>
-                </div>
+                            <lightning-button-icon
+                                icon-name="utility:copy"
+                                variant="bare"
+                                size="small"
+                                alternative-text="Copy schema"
+                                title="Copy schema"
+                                onclick={handleCopySchema}>
+                            </lightning-button-icon>
+                        </header>
+                        <pre class="schema-text schema-card__body">{selectedToolSchema}</pre>
+                    </section>
+                </template>
             </div>
         </template>
+
+        <!-- Network trace docked panel (rendered on all views) -->
+        <c-mcp-network-trace
+            entries={traceEntries}
+            expanded={showNetworkTrace}
+            ontoggle={handleToggleNetworkTrace}
+            onclear={handleClearNetworkTrace}>
+        </c-mcp-network-trace>
 
     </lightning-card>
 </template>
