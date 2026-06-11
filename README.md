@@ -55,6 +55,10 @@ A Salesforce Lightning application for testing and validating MCP (Model Context
 
 `sf package install -p 04tHs000000iSjcIAE -o {TARGET}`
 
+OR
+
+[https://{ORG_NAME}.my.salesforce.com/packaging/installPackage.apexp?p0=04tHs000000iSjcIAE](https://{ORG_NAME}.my.salesforce.com/packaging/installPackage.apexp?p0=04tHs000000iSjcIAE)
+
 #### Namespaced Orgs
 
 Clone repo:
